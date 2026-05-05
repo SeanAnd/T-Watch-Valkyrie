@@ -9,8 +9,8 @@ namespace valkyrie
 
 /// Same window as `BleThreatDetectorModule::getHeartbeatSignalTier()` staleness.
 constexpr uint32_t kHeartbeatRssiStaleMs = 10000;
-/// EMA alpha = 64/256 = 0.25 on integer dBm.
-constexpr int32_t kHeartbeatRssiEmaAlpha256 = 64;
+/// EMA alpha on integer dBm (lower = more smoothing vs raw RSSI).
+constexpr int32_t kHeartbeatRssiEmaAlpha256 = 48; // 48/256 ≈ 0.19
 
 /** Nominal tier from smoothed (or raw) dBm — used after init / stale reset. */
 HeartbeatSignalTier heartbeatRssiInstaTier(int32_t sDbm);

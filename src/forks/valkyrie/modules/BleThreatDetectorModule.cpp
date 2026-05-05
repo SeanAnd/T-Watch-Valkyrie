@@ -71,6 +71,21 @@ static void pulseThreatHapticOnce(bool &latch)
 }
 #endif
 
+#if defined(HAS_I2S)
+static void pulseThreatSoundOnce(bool &latch)
+{
+    if (latch)
+        return;
+    if (!audioThread)
+        return;
+    if (audioThread->isPlaying())
+        return;
+    static const char kRttl[] = "d=8,o=6,b=1200:16";
+    audioThread->beginRttl(kRttl, (uint32_t)strlen(kRttl));
+    latch = true;
+}
+#endif
+
 } // namespace
 
 // Single global module instance pointer, set by the constructor and used
@@ -203,6 +218,7 @@ void BleThreatDetectorModule::startScanWindow()
     if (scan->start(prefs.scanWindowSecs, /*scanCompleteCB=*/nullptr, /*is_continue=*/false)) {
         scanActive = true;
         hapticEmittedThisScanWindow = false;
+        soundEmittedThisScanWindow = false;
         scanStartedMs = millis();
         LOG_DEBUG("Valkyrie: BLE scan started for %us", prefs.scanWindowSecs);
     } else {
@@ -469,7 +485,13 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
              mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi, name ? name : "", cls.detail);
 
 #if defined(HAS_DRV2605) && defined(T_WATCH_S3)
-    pulseThreatHapticOnce(hapticEmittedThisScanWindow);
+    if (prefs.threatDetectionHapticEnabled)
+        pulseThreatHapticOnce(hapticEmittedThisScanWindow);
+#endif
+
+#if defined(HAS_I2S)
+    if (prefs.threatDetectionSoundEnabled)
+        pulseThreatSoundOnce(soundEmittedThisScanWindow);
 #endif
 
     // 2. Phone delivery via PRIVATE_APP. Only attempt if the upstream

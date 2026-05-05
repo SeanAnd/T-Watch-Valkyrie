@@ -28,5 +28,11 @@
     "threatScanMask": 63,
 
     // no idle gap between BLE scan windows when true (higher power); NVS key const_scn
-    "constantBleScanMode": false
+    "constantBleScanMode": false,
+
+    // passive threat detection only (`emitDetection`); NVS key thr_hapt
+    "threatDetectionHapticEnabled": true,
+
+    // passive threat detection only, HAS_I2S builds; NVS key thr_snd
+    "threatDetectionSoundEnabled": true
 }

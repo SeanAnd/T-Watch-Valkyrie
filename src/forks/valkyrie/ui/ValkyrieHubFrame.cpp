@@ -24,15 +24,16 @@ namespace valkyrie
 namespace
 {
 
-constexpr unsigned kStartFrameCount = 5;
+constexpr unsigned kBleStartFrameCount = 6;
 constexpr unsigned kLoopFrameCount = 3;
 /// Per-frame hold for BLE start/outro clips only (loops use kFrameMsLoop).
-constexpr uint32_t kFrameMsIntro = 120;
+constexpr uint32_t kFrameMsIntro = 160;
 constexpr uint32_t kFrameMsLoop = 80;
-constexpr uint32_t kIntroTotalMs = kStartFrameCount * kFrameMsIntro;
-constexpr uint32_t kOutroTotalMs = kStartFrameCount * kFrameMsIntro;
+constexpr uint32_t kIntroTotalMs = kBleStartFrameCount * kFrameMsIntro;
+constexpr uint32_t kOutroTotalMs = kBleStartFrameCount * kFrameMsIntro;
 
-static const uint16_t *const kStartBleScanFrames[kStartFrameCount] = {
+static const uint16_t *const kStartBleScanFrames[kBleStartFrameCount] = {
+    idle_rgb565,
     startBleScan1_rgb565,
     startBleScan2_rgb565,
     startBleScan3_rgb565,
@@ -40,21 +41,25 @@ static const uint16_t *const kStartBleScanFrames[kStartFrameCount] = {
     startBleScan5_rgb565,
 };
 
+/// First cel of BLE and sleep intro strips (`idle_rgb565`); use for resting / unknown timeline.
+static const uint16_t *const kHubIdlePose = kStartBleScanFrames[0];
+
 static const uint16_t *const kScanBleLoopFrames[kLoopFrameCount] = {
     scanBleLoop1_rgb565,
     scanBleLoop2_rgb565,
     scanBleLoop3_rgb565,
 };
 
-constexpr unsigned kSleepStartFrameCount = 5;
+constexpr unsigned kSleepStartFrameCount = 6;
 constexpr unsigned kSleepLoopFrameCount = 3;
 /// Per-frame hold for sleep start / wake reverse only (loops use kFrameMsSleepLoop).
-constexpr uint32_t kFrameMsSleepIntro = 120;
+constexpr uint32_t kFrameMsSleepIntro = 160;
 constexpr uint32_t kFrameMsSleepLoop = 80;
 constexpr uint32_t kSleepIntroTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
 constexpr uint32_t kWakeReverseTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
 
 static const uint16_t *const kStartSleepFrames[kSleepStartFrameCount] = {
+    kHubIdlePose,
     startSleep1_rgb565,
     startSleep2_rgb565,
     startSleep3_rgb565,
@@ -99,7 +104,7 @@ void drawRgb565SpriteHubScaled(OLEDDisplay *display, int16_t originX, int16_t or
 const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
 {
     if (!det)
-        return idle_rgb565;
+        return kHubIdlePose;
 
     const uint32_t now = millis();
 
@@ -115,8 +120,8 @@ const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
         const uint32_t tBle = tw - kWakeReverseTotalMs;
         if (tBle < kIntroTotalMs) {
             unsigned fi = (unsigned)(tBle / kFrameMsIntro);
-            if (fi >= kStartFrameCount)
-                fi = kStartFrameCount - 1;
+            if (fi >= kBleStartFrameCount)
+                fi = kBleStartFrameCount - 1;
             return kStartBleScanFrames[fi];
         }
         const uint32_t t2 = tBle - kIntroTotalMs;
@@ -129,14 +134,14 @@ const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
 
     const uint32_t lastEnd = det->getLastScanWindowEndMs();
     if (lastEnd == 0)
-        return idle_rgb565;
+        return kHubIdlePose;
 
     const uint32_t te = now - lastEnd;
     if (te < kOutroTotalMs) {
         unsigned seg = (unsigned)(te / kFrameMsIntro);
-        if (seg >= kStartFrameCount)
-            seg = kStartFrameCount - 1;
-        const unsigned revIdx = (kStartFrameCount - 1) - seg;
+        if (seg >= kBleStartFrameCount)
+            seg = kBleStartFrameCount - 1;
+        const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
         return kStartBleScanFrames[revIdx];
     }
 

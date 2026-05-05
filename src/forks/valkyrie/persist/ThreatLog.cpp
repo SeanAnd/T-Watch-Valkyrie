@@ -5,13 +5,56 @@
 
 #include "../ThreatTypeUi.h"
 #include "FSCommon.h"
+#include "SPILock.h"
 
 #include <cctype>
-#include <cstring>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace valkyrie
 {
+
+// Arduino-esp32 LittleFS mounts at "/littlefs" (see LittleFS.h default basePath).
+// VFSImpl::open(..., "r") logs log_e when the path is missing; FS.exists() uses
+// that path — avoid both for hot paths (hub polls lineCount).
+static void littlefsAbsPath(char *out, size_t outCap, const char *fsRelative)
+{
+    snprintf(out, outCap, "/littlefs%s", fsRelative);
+}
+
+static bool isRegularFileQuiet(const char *fsRelative)
+{
+    struct stat st;
+    char absPath[96];
+    littlefsAbsPath(absPath, sizeof(absPath), fsRelative);
+    return ::stat(absPath, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/** Delete file if present; success when absent or unlinked. Avoids FS.remove() read-open noise. */
+static bool unlinkIfExistsQuiet(const char *fsRelative)
+{
+    char absPath[96];
+    littlefsAbsPath(absPath, sizeof(absPath), fsRelative);
+    if (::unlink(absPath) == 0)
+        return true;
+    return errno == ENOENT;
+}
+
+static bool regularFileSizeQuiet(const char *fsRelative, size_t *sizeOut)
+{
+    struct stat st;
+    char absPath[96];
+    littlefsAbsPath(absPath, sizeof(absPath), fsRelative);
+    if (::stat(absPath, &st) != 0 || !S_ISREG(st.st_mode))
+        return false;
+    *sizeOut = (size_t)st.st_size;
+    return true;
+}
 
 static int hexValue(char c)
 {
@@ -261,6 +304,119 @@ static void formatThreatLineForDisplay(const String &raw, char *out, size_t outL
     out[outLen - 1] = '\0';
 }
 
+namespace {
+
+constexpr const char *kThreatLogTmpPath = "/valkyrie/threats.log.tmp";
+
+static bool csvLineMatchesThreatIdentity(const char *lineBuf, const char *typeName, const uint8_t mac[6])
+{
+    if (!lineBuf || !*lineBuf || !typeName || !mac)
+        return false;
+    char f1[48], f2[48], f3[32];
+    const char *wire = nullptr;
+    const char *macField = nullptr;
+    if (!parseThreatCsvPrefix(lineBuf, &wire, &macField, f1, sizeof(f1), f2, sizeof(f2), f3, sizeof(f3)))
+        return false;
+    if (strcmp(wire, typeName) != 0)
+        return false;
+    uint8_t parsedMac[6];
+    if (!macFieldToBytes(macField, parsedMac))
+        return false;
+    return memcmp(parsedMac, mac, 6) == 0;
+}
+
+static bool logFileHasDuplicateIdentity(const char *typeName, const uint8_t mac[6])
+{
+    if (!isRegularFileQuiet(ThreatLog::kPath))
+        return false;
+    auto file = FSCom.open(ThreatLog::kPath, FILE_O_READ);
+    if (!file)
+        return false;
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
+        char buf[256];
+        strncpy(buf, line.c_str(), sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        if (csvLineMatchesThreatIdentity(buf, typeName, mac)) {
+            file.close();
+            return true;
+        }
+    }
+    file.close();
+    return false;
+}
+
+static bool rewriteThreatLogReplacingIdentity(const uint8_t *newLine, size_t newLineLen, const char *typeName,
+                                              const uint8_t mac[6])
+{
+    // Read whole log into RAM first, then close before opening the temp file.
+    // Meshtastic LittleFS is guarded by spiLock and may not tolerate overlapping
+    // operations; keeping two files open at once also fails on some builds.
+    std::vector<String> kept;
+    {
+        auto fr = FSCom.open(ThreatLog::kPath, FILE_O_READ);
+        if (!fr)
+            return false;
+        while (fr.available()) {
+            String line = fr.readStringUntil('\n');
+            line.trim();
+            if (line.length() == 0)
+                continue;
+            char buf[256];
+            strncpy(buf, line.c_str(), sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            if (csvLineMatchesThreatIdentity(buf, typeName, mac))
+                continue;
+            kept.push_back(line);
+        }
+        fr.close();
+    }
+
+    unlinkIfExistsQuiet(kThreatLogTmpPath);
+    auto fw = FSCom.open(kThreatLogTmpPath, FILE_O_WRITE);
+    if (!fw)
+        return false;
+    for (const auto &line : kept) {
+        fw.print(line.c_str());
+        fw.print('\n');
+    }
+    fw.write(newLine, newLineLen);
+    fw.close();
+
+    if (!unlinkIfExistsQuiet(ThreatLog::kPath)) {
+        LOG_WARN("Valkyrie: threats.log remove before upsert rename failed");
+        unlinkIfExistsQuiet(kThreatLogTmpPath);
+        return false;
+    }
+    if (!FSCom.rename(kThreatLogTmpPath, ThreatLog::kPath)) {
+        LOG_WARN("Valkyrie: threats.log rename from tmp failed");
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+/** Line count for threats.log; caller must hold spiLock (matches RangeTestModule / SafeFile). */
+static size_t threatLogLineCountUnlocked()
+{
+    if (!isRegularFileQuiet(ThreatLog::kPath))
+        return 0;
+    auto file = FSCom.open(ThreatLog::kPath, FILE_O_READ);
+    if (!file)
+        return 0;
+    size_t lines = 0;
+    while (file.available()) {
+        if (file.read() == '\n')
+            lines++;
+    }
+    file.close();
+    return lines;
+}
+
 void ThreatLog::ensureDir()
 {
     // LittleFS on ESP32 doesn't strictly require explicit mkdir for
@@ -272,35 +428,32 @@ void ThreatLog::ensureDir()
 
 void ThreatLog::rotateIfNeeded(size_t pendingBytes)
 {
-    if (!FSCom.exists(kPath))
+    size_t current = 0;
+    if (!regularFileSizeQuiet(kPath, &current))
         return;
 
-    size_t current = 0;
-    {
-        auto stat = FSCom.open(kPath, FILE_O_READ);
-        if (stat) {
-            current = stat.size();
-            stat.close();
-        }
-    }
     if (current + pendingBytes <= kMaxBytes)
         return;
 
     LOG_INFO("Valkyrie: rotating %s (%u bytes -> %s)", kPath, (unsigned)current, kBackupPath);
 
-    if (FSCom.exists(kBackupPath))
-        FSCom.remove(kBackupPath);
+    unlinkIfExistsQuiet(kBackupPath);
     if (!FSCom.rename(kPath, kBackupPath)) {
         LOG_WARN("Valkyrie: rotate rename failed; deleting current log to recover");
-        FSCom.remove(kPath);
+        unlinkIfExistsQuiet(kPath);
     }
 }
 
 void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8_t mac[6], const char *name, int32_t rssi,
                        const char *detail)
 {
+    concurrency::LockGuard guard(spiLock);
+
     ensureDir();
 
+    unlinkIfExistsQuiet(kThreatLogTmpPath);
+
+    const char *tn = typeName ? typeName : "?";
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
@@ -313,12 +466,31 @@ void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8
     // Strings are quoted to keep CSV parseable when they contain commas.
     char line[256];
     // type first for on-device display; ts/mac/name/rssi/detail unchanged after that.
-    int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\"\n", typeName ? typeName : "?",
-                     (unsigned)timestampSecs, macStr, nameEsc, (int)rssi, detailEsc);
+    int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\"\n", tn, (unsigned)timestampSecs, macStr, nameEsc,
+                     (int)rssi, detailEsc);
     if (n < 0)
         return;
     if (n >= (int)sizeof(line))
         n = sizeof(line) - 1;
+
+    const bool hadDup = logFileHasDuplicateIdentity(tn, mac);
+
+    if (hadDup) {
+        if (!rewriteThreatLogReplacingIdentity(reinterpret_cast<const uint8_t *>(line), (size_t)n, tn, mac)) {
+            LOG_WARN("Valkyrie: threat log upsert rewrite failed; appending line anyway");
+            rotateIfNeeded((size_t)n);
+            auto file = FSCom.open(kPath, FILE_APPEND);
+            if (!file) {
+                LOG_WARN("Valkyrie: failed to open %s for append", kPath);
+                return;
+            }
+            file.write(reinterpret_cast<const uint8_t *>(line), n);
+            file.close();
+            return;
+        }
+        rotateIfNeeded(0);
+        return;
+    }
 
     rotateIfNeeded((size_t)n);
 
@@ -337,18 +509,8 @@ void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8
 
 size_t ThreatLog::lineCount()
 {
-    if (!FSCom.exists(kPath))
-        return 0;
-    auto file = FSCom.open(kPath, FILE_O_READ);
-    if (!file)
-        return 0;
-    size_t lines = 0;
-    while (file.available()) {
-        if (file.read() == '\n')
-            lines++;
-    }
-    file.close();
-    return lines;
+    concurrency::LockGuard guard(spiLock);
+    return threatLogLineCountUnlocked();
 }
 
 /** `fileLineIndex` is 0-based from BOF; first line in file is oldest threat. */
@@ -357,7 +519,7 @@ static bool readLineAtFileIndex(size_t fileLineIndex, char *out, size_t outCap)
     if (!out || outCap == 0)
         return false;
     out[0] = '\0';
-    if (!FSCom.exists(ThreatLog::kPath))
+    if (!isRegularFileQuiet(ThreatLog::kPath))
         return false;
     auto file = FSCom.open(ThreatLog::kPath, FILE_O_READ);
     if (!file)
@@ -378,15 +540,13 @@ static bool readLineAtFileIndex(size_t fileLineIndex, char *out, size_t outCap)
     return false;
 }
 
-static bool viewerPageBounds(size_t pageIndex, size_t maxLines, size_t kMaxLinesPerPage, size_t *totalOut,
+static bool viewerPageBounds(size_t pageIndex, size_t maxLines, size_t kMaxLinesPerPage, size_t total,
                              size_t *endExclusiveOut, size_t *startInclusiveOut, size_t *linesOnPageOut)
 {
-    if (!totalOut || !endExclusiveOut || !startInclusiveOut || !linesOnPageOut)
+    if (!endExclusiveOut || !startInclusiveOut || !linesOnPageOut)
         return false;
     if (maxLines == 0 || maxLines > kMaxLinesPerPage)
         return false;
-    size_t total = ThreatLog::lineCount();
-    *totalOut = total;
     if (total == 0 || pageIndex * maxLines >= total)
         return false;
     size_t endExclusive = total - pageIndex * maxLines;
@@ -404,11 +564,12 @@ bool ThreatLog::readViewerLine(size_t pageIndex, size_t lineOnPage, size_t maxLi
     if (!rawCsvOut || rawCap == 0)
         return false;
     rawCsvOut[0] = '\0';
+    concurrency::LockGuard guard(spiLock);
     constexpr size_t kMaxLinesPerPage = 8;
-    size_t total = 0, endExclusive = 0, startInclusive = 0, linesOnPage = 0;
-    if (!viewerPageBounds(pageIndex, maxLines, kMaxLinesPerPage, &total, &endExclusive, &startInclusive, &linesOnPage))
+    size_t total = threatLogLineCountUnlocked();
+    size_t endExclusive = 0, startInclusive = 0, linesOnPage = 0;
+    if (!viewerPageBounds(pageIndex, maxLines, kMaxLinesPerPage, total, &endExclusive, &startInclusive, &linesOnPage))
         return false;
-    (void)total;
     if (lineOnPage >= linesOnPage)
         return false;
     size_t fileLineIndex = endExclusive - 1 - lineOnPage;
@@ -438,17 +599,16 @@ void ThreatLog::buildLineWindow(size_t pageIndex, size_t maxLines, char *outMsg,
     if (!outMsg || outLen == 0 || maxLines == 0)
         return;
     outMsg[0] = '\0';
-    if (!FSCom.exists(kPath))
-        return;
+    concurrency::LockGuard guard(spiLock);
 
     constexpr size_t kMaxLinesPerPage = 8;
     if (maxLines > kMaxLinesPerPage)
         maxLines = kMaxLinesPerPage;
 
-    size_t total = 0, endExclusive = 0, startInclusive = 0, linesOnPage = 0;
-    if (!viewerPageBounds(pageIndex, maxLines, kMaxLinesPerPage, &total, &endExclusive, &startInclusive, &linesOnPage))
+    size_t total = threatLogLineCountUnlocked();
+    size_t endExclusive = 0, startInclusive = 0, linesOnPage = 0;
+    if (!viewerPageBounds(pageIndex, maxLines, kMaxLinesPerPage, total, &endExclusive, &startInclusive, &linesOnPage))
         return;
-    (void)total;
 
     char fmtBuf[kMaxLinesPerPage][160];
     size_t n = 0;
@@ -473,11 +633,11 @@ void ThreatLog::buildLineWindow(size_t pageIndex, size_t maxLines, char *outMsg,
 
 void ThreatLog::clearAll()
 {
+    concurrency::LockGuard guard(spiLock);
     ensureDir();
-    if (FSCom.exists(kPath))
-        FSCom.remove(kPath);
-    if (FSCom.exists(kBackupPath))
-        FSCom.remove(kBackupPath);
+    unlinkIfExistsQuiet(kThreatLogTmpPath);
+    unlinkIfExistsQuiet(kPath);
+    unlinkIfExistsQuiet(kBackupPath);
 }
 
 } // namespace valkyrie

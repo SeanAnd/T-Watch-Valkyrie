@@ -77,17 +77,11 @@ What actually ships in this fork today.
 
 - **Heartbeat signal / tier stability.** It still jumps between weak / medium / strong more than I’d like: 15-20 dB of swing is normal in the real world and the EMA only does so much. More smoothing, hysteresis, or a different mapping from RSSI to tier would help.
 
-- **Exiting heartbeat doesn’t return to Valkyrie.** Stopping heartbeat (e.g. tap) often drops you on the **time / clock** screen instead of back into the Valkyrie flow you came from. Navigation / `menuHandler` state needs to be fixed so you land back on the right screen.
-
 ## Future plans
 
 Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
-
-An **alerts** menu (or equivalent) that stores preferences after reboot for **per-threat-type** audible and haptic behavior. Today we have global detector on/off, per-type *scanning*, constant scan mode, and one haptic per window, not per-threat alert routing.
-
-**WiFi promiscuous-mode** threat detection (DEAUTH / EAPOL / PWNAGOTCHI / PINEAPPLE / MULTISSID / EVILPORTAL) with a cooperative scan-window radio-share design. Will live under `forks/valkyrie/modules/WifiThreatDetectorModule.{h,cpp}` with the same fork-overlay pattern. Toggle-on because it will likely cause a small hiccup in phone connectivity roughly 2-5 seconds every few minutes due to shared BLE/Wi-Fi.
 
 Extra logic for **AirTags** so we only warn if they appear to be **following** the user. AirTags alone are plentiful and can mean constant warnings / false positives. Better to avoid alert exhaustion. If an AirTag shows up multiple times in an interval, or GPS is enabled, we could track proximity/distance to judge a genuine stalking pattern (probably similar to how Apple/Android reason about it).
 

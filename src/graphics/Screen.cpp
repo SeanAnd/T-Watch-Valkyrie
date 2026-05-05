@@ -990,6 +990,11 @@ int32_t Screen::runOnce()
                 setFrames();
             }
             break;
+#if defined(VALKYRIE_FORK)
+        case Cmd::SWITCH_TO_VALKYRIE_HUB:
+            switchToValkyrieHubFrame();
+            break;
+#endif
         case Cmd::NOOP:
             break;
         default:
@@ -2049,6 +2054,11 @@ bool Screen::isOverlayBannerShowing()
 }
 
 #if defined(VALKYRIE_FORK)
+void Screen::queueSwitchToValkyrieHubFrame()
+{
+    enqueueCmd(ScreenCmd{.cmd = Cmd::SWITCH_TO_VALKYRIE_HUB});
+}
+
 void Screen::switchToValkyrieHubFrame()
 {
     if (framesetInfo.positions.valkyrie != 255)

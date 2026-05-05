@@ -61,6 +61,7 @@ class menuHandler
         ValkyrieThreatLogMenu,
         ValkyrieThreatsMenu,
         ValkyrieSettingsMenu,
+        ValkyrieNotificationsMenu,
         ValkyrieConstantScanConfirmMenu,
         ValkyrieThreatLogEntryMenu,
         ValkyrieIgnoreListMenu,

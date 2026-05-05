@@ -5,6 +5,7 @@
 namespace valkyrie
 {
 void showSettingsMenu();
+void showNotificationsMenu();
 void showConstantScanEnableConfirmMenu();
 } // namespace valkyrie
 

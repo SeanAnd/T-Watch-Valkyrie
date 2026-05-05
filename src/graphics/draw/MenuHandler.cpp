@@ -2826,6 +2826,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case ValkyrieSettingsMenu:
         valkyrie::showSettingsMenu();
         break;
+    case ValkyrieNotificationsMenu:
+        valkyrie::showNotificationsMenu();
+        break;
     case ValkyrieConstantScanConfirmMenu:
         valkyrie::showConstantScanEnableConfirmMenu();
         break;

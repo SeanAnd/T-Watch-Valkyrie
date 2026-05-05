@@ -14,5 +14,9 @@ enum class Cmd {
     STOP_BOOT_SCREEN,
     SHOW_PREV_FRAME,
     SHOW_NEXT_FRAME,
+#if defined(VALKYRIE_FORK)
+    /** Processed after pending STOP_ALERT so switchToFrame sees the full frameset (heartbeat exit). */
+    SWITCH_TO_VALKYRIE_HUB,
+#endif
     NOOP
 };

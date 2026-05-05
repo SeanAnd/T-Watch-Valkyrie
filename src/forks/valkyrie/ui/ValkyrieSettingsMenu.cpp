@@ -20,21 +20,21 @@ void showSettingsMenu()
 {
     ValkyriePrefs prefs = ValkyriePrefs::load();
 
-    enum opt { OptBack, OptToggleDetector, OptConstantScan };
+    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptNotifications };
     static char detectorToggleLabel[28];
     snprintf(detectorToggleLabel, sizeof(detectorToggleLabel), "%s detector", prefs.bleThreatDetectorEnabled ? "Disable" : "Enable");
 
     static char constantScanLabel[40];
     snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
 
-    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel};
-    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan};
+    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, "Notifications"};
+    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptNotifications};
 
     graphics::BannerOverlayOptions bannerOptions{};
     bannerOptions.message = "Valkyrie settings";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsEnumPtr = enums;
-    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsCount = 4;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == OptBack) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieRootMenu;
@@ -59,7 +59,52 @@ void showSettingsMenu()
                 graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieConstantScanConfirmMenu;
                 screen->runNow();
             }
+        } else if (selected == OptNotifications) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
+            screen->runNow();
         }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void showNotificationsMenu()
+{
+    ValkyriePrefs prefs = ValkyriePrefs::load();
+
+    enum opt { OptBack, OptToggleHaptic, OptToggleSound };
+    static char hapticLabel[22];
+    static char soundLabel[20];
+    snprintf(hapticLabel, sizeof(hapticLabel), "Haptic: %s", prefs.threatDetectionHapticEnabled ? "On" : "Off");
+    snprintf(soundLabel, sizeof(soundLabel), "Sound: %s", prefs.threatDetectionSoundEnabled ? "On" : "Off");
+
+    static const char *labels[] = {"Back", hapticLabel, soundLabel};
+    static int enums[] = {OptBack, OptToggleHaptic, OptToggleSound};
+
+    graphics::BannerOverlayOptions bannerOptions{};
+    bannerOptions.message = "Notifications";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsEnumPtr = enums;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == OptBack) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieSettingsMenu;
+            screen->runNow();
+            return;
+        }
+        ValkyriePrefs p = ValkyriePrefs::load();
+        if (selected == OptToggleHaptic)
+            p.threatDetectionHapticEnabled = !p.threatDetectionHapticEnabled;
+        else if (selected == OptToggleSound)
+            p.threatDetectionSoundEnabled = !p.threatDetectionSoundEnabled;
+        else
+            return;
+        p.save();
+        if (bleThreatDetector)
+            bleThreatDetector->reloadPrefs();
+        // Re-queue this menu so labels refresh and the user stays on Notifications
+        // (showSimpleBanner would dismiss the options overlay).
+        graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
+        screen->runNow();
     };
     screen->showOverlayBanner(bannerOptions);
 }

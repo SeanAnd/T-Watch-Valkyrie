@@ -32,19 +32,21 @@ void heartbeatRssiApplyHysteresis(volatile uint8_t *latchedTierU8, int32_t s)
         *latchedTierU8 = static_cast<uint8_t>(heartbeatRssiInstaTier(s));
         return;
     }
+    // Wider deadbands than nominal insta boundaries (-75 / -60) so ~15 dB fades
+    // do not constantly flip the latched tier when the EMA wiggles near an edge.
     switch (T) {
     case HeartbeatSignalTier::Weak:
-        if (s >= -73)
+        if (s >= -68)
             *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
         break;
     case HeartbeatSignalTier::Medium:
-        if (s < -77)
+        if (s < -82)
             *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Weak);
-        else if (s >= -58)
+        else if (s >= -54)
             *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Strong);
         break;
     case HeartbeatSignalTier::Strong:
-        if (s < -62)
+        if (s < -66)
             *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
         break;
     default:

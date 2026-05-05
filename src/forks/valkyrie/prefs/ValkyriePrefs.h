@@ -25,6 +25,10 @@ struct ValkyriePrefs {
     // When true, no idle gap between BLE scan windows (higher power use). NVS key const_scn.
     bool constantBleScanMode;
 
+    // Passive threat detection feedback (emitDetection only; heartbeat hunt mode ignores these).
+    bool threatDetectionHapticEnabled; // NVS key thr_hapt
+    bool threatDetectionSoundEnabled;  // NVS key thr_snd
+
     // Load with defaults seeded if nothing has ever been written.
     static ValkyriePrefs load();
 

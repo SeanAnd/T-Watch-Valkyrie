@@ -252,8 +252,10 @@ class Screen : public concurrency::OSThread
     bool isOverlayBannerShowing();
 
 #if defined(VALKYRIE_FORK)
-    /** After heartbeat alert teardown, focus the Valkyrie hub (FOCUS_DEFAULT uses deviceFocused=255). */
+    /** Focus the Valkyrie hub frame (call from Screen command handler after full frameset is active). */
     void switchToValkyrieHubFrame();
+    /** Enqueue hub focus so it runs after STOP_ALERT on the Screen thread (heartbeat exit from alert draw path). */
+    void queueSwitchToValkyrieHubFrame();
 #endif
 
     bool isScreenOn() { return screenOn; }

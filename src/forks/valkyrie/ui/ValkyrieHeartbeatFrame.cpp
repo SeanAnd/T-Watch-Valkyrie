@@ -14,8 +14,6 @@
 #include "sprites/heartbeat_loop_rgb565.h"
 #include "sprites/start_heartbeat_scan_rgb565.h"
 
-#include <cstdio>
-
 namespace valkyrie
 {
 
@@ -90,7 +88,7 @@ static void finishHeartbeatUiExit()
     if (screen)
         screen->runNow();
     if (screen)
-        screen->switchToValkyrieHubFrame();
+        screen->queueSwitchToValkyrieHubFrame();
 }
 
 static const uint16_t *pickPixels(uint32_t nowMs)

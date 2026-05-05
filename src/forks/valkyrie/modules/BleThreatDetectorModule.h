@@ -114,8 +114,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     NimBLEScan *scan = nullptr;
     bool scanInitialised = false;
     bool scanActive = false;
-    /// At most one threat haptic per scan window (reset when a new window starts).
+    /// At most one threat haptic per passive scan window (`emitDetection`; reset in startScanWindow).
     bool hapticEmittedThisScanWindow = false;
+    /// At most one threat sound per passive scan window (`emitDetection`; reset in startScanWindow).
+    bool soundEmittedThisScanWindow = false;
     uint32_t scanStartedMs = 0;
     /// Set when a scan window ends (NimBLE stop or forced stop). Zero means
     /// no window has completed yet this session — no inter-window gap then.

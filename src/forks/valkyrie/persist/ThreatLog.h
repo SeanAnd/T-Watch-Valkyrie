@@ -8,9 +8,10 @@
 namespace valkyrie
 {
 
-// Append-only CSV log of detected threats on LittleFS with a single
-// backup file rotation. Path is namespaced under /valkyrie/ so we
-// don't collide with any current or future upstream file.
+// CSV log of detected threats on LittleFS with a single backup file rotation.
+// At most one row per (threat type wire token, MAC): a new sighting replaces
+// older lines for the same identity so the viewer stays newest-first without
+// duplicate keys. Path is namespaced under /valkyrie/.
 //
 //   /valkyrie/threats.log    current log (rotated when it exceeds kMaxBytes)
 //   /valkyrie/threats.log.1  most recent rotation, kept as backup
@@ -26,7 +27,7 @@ class ThreatLog
     static constexpr const char *kPath = "/valkyrie/threats.log";
     static constexpr const char *kBackupPath = "/valkyrie/threats.log.1";
 
-    // Append one detection. Rotates if the file would exceed kMaxBytes.
+    // Record one detection (upsert by type + MAC). Rotates if the file would exceed kMaxBytes.
     // - timestampSecs: millis()/1000 at detection time
     // - typeName: short string ("AIRTAG", "FLIPPER", ...) for human-readable CSV
     // - mac: 6 raw bytes

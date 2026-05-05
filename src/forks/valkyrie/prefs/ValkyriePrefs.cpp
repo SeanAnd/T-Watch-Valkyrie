@@ -18,6 +18,8 @@ static constexpr const char *kKeyDedupe = "dedup";
 static constexpr const char *kKeySeeded = "seeded";
 static constexpr const char *kKeyScanMask = "scan_msk";
 static constexpr const char *kKeyConstScan = "const_scn";
+static constexpr const char *kKeyThreatHaptic = "thr_hapt";
+static constexpr const char *kKeyThreatSound = "thr_snd";
 
 ValkyriePrefs ValkyriePrefs::defaults()
 {
@@ -32,6 +34,8 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.dedupeWindowSecs = 60;  // re-emit a given mac+type at most once/minute
     p.threatScanMask = ValkyriePrefs::kThreatScanMaskAll;
     p.constantBleScanMode = false;
+    p.threatDetectionHapticEnabled = true;
+    p.threatDetectionSoundEnabled = true;
     return p;
 }
 
@@ -55,6 +59,8 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putUShort(kKeyDedupe, def.dedupeWindowSecs);
         prefs.putUChar(kKeyScanMask, def.threatScanMask);
         prefs.putBool(kKeyConstScan, def.constantBleScanMode);
+        prefs.putBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
+        prefs.putBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
         prefs.putBool(kKeySeeded, true);
     }
 
@@ -66,6 +72,8 @@ ValkyriePrefs ValkyriePrefs::load()
     out.dedupeWindowSecs = prefs.getUShort(kKeyDedupe, def.dedupeWindowSecs);
     out.threatScanMask = static_cast<uint8_t>(prefs.getUChar(kKeyScanMask, def.threatScanMask) & ValkyriePrefs::kThreatScanMaskAll);
     out.constantBleScanMode = prefs.getBool(kKeyConstScan, def.constantBleScanMode);
+    out.threatDetectionHapticEnabled = prefs.getBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
+    out.threatDetectionSoundEnabled = prefs.getBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
     prefs.end();
 
     // Sanity-clamp: a zero-window or zero-interval would cause us to
@@ -98,6 +106,8 @@ void ValkyriePrefs::save() const
     prefs.putUShort(kKeyDedupe, dedupeWindowSecs);
     prefs.putUChar(kKeyScanMask, static_cast<uint8_t>(threatScanMask & ValkyriePrefs::kThreatScanMaskAll));
     prefs.putBool(kKeyConstScan, constantBleScanMode);
+    prefs.putBool(kKeyThreatHaptic, threatDetectionHapticEnabled);
+    prefs.putBool(kKeyThreatSound, threatDetectionSoundEnabled);
     prefs.putBool(kKeySeeded, true);
     prefs.end();
 }
@@ -118,6 +128,8 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.dedupeWindowSecs = 60;
     p.threatScanMask = ValkyriePrefs::kThreatScanMaskAll;
     p.constantBleScanMode = false;
+    p.threatDetectionHapticEnabled = true;
+    p.threatDetectionSoundEnabled = true;
     return p;
 }
 ValkyriePrefs ValkyriePrefs::load() { return defaults(); }
