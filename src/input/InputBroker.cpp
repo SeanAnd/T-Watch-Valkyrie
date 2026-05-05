@@ -5,6 +5,10 @@
 #include "input/HapticFeedback.h"
 #include "modules/ExternalNotificationModule.h"
 
+#if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
+#include "forks/valkyrie/ui/ValkyrieHeartbeatInput.h"
+#endif
+
 #if ARCH_PORTDUINO
 #include "input/LinuxInputImpl.h"
 #include "input/SeesawRotary.h"
@@ -121,6 +125,11 @@ int InputBroker::handleInputEvent(const InputEvent *event)
         // If the screen was off, it is in the process of turning on, and we just drop the event
         return 0;
     }
+#endif
+
+#if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
+    if (valkyrie::handleHeartbeatScreenInput(event))
+        return 0;
 #endif
 
     this->notifyObservers(event);

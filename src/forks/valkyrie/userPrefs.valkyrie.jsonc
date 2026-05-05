@@ -1,0 +1,32 @@
+// Default preferences for the Valkyrie fork overlay.
+//
+// IMPORTANT: this file is NEVER read by the firmware at build time.
+// It is documentation only. The compiled defaults live in
+// forks/valkyrie/prefs/ValkyriePrefs.cpp::ValkyriePrefs::defaults().
+//
+// We deliberately ship our own jsonc rather than touching upstream's
+// firmware/userPrefs.jsonc so that running the upstream
+// `bin/build-userprefs-json.py` flow stays a clean no-op for our keys.
+{
+    // Phase 1: BLE threat detector
+    "bleThreatDetectorEnabled": true,
+
+    // target seconds between scan window *starts* (must be >= 30). Idle gap =
+    // max(0, scanIntervalSecs - scanWindowSecs).
+    "scanIntervalSecs": 30,
+
+    // length of each passive BLE scan window, seconds
+    "scanWindowSecs": 10,
+
+    // skip scans while battery is below this percentage
+    "minBatteryPct": 20,
+
+    // re-emit the same (mac, threat type) at most once per this window, seconds
+    "dedupeWindowSecs": 60,
+
+    // bits 0..5 enable Airtag..Drone threat scanning (0x3F = all on); NVS key scan_msk
+    "threatScanMask": 63,
+
+    // no idle gap between BLE scan windows when true (higher power); NVS key const_scn
+    "constantBleScanMode": false
+}

@@ -251,6 +251,11 @@ class Screen : public concurrency::OSThread
 
     bool isOverlayBannerShowing();
 
+#if defined(VALKYRIE_FORK)
+    /** After heartbeat alert teardown, focus the Valkyrie hub (FOCUS_DEFAULT uses deviceFocused=255). */
+    void switchToValkyrieHubFrame();
+#endif
+
     bool isScreenOn() { return screenOn; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
@@ -707,6 +712,9 @@ class Screen : public concurrency::OSThread
             uint8_t firstFavorite = 255;
             uint8_t lastFavorite = 255;
             uint8_t lora = 255;
+#if defined(VALKYRIE_FORK)
+            uint8_t valkyrie = 255;
+#endif
         } positions;
 
         uint8_t frameCount = 0;

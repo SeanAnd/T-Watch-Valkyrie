@@ -104,6 +104,14 @@
 #if defined(HAS_HARDWARE_WATCHDOG)
 #include "watchdog/watchdogThread.h"
 #endif
+
+// Valkyrie fork overlay (firmware/src/forks/valkyrie/). Gated by VALKYRIE_FORK so
+// stock builds (arduino_base excludes forks/valkyrie/ from compilation) do not
+// pull in the overlay. Parallel envs define VALKYRIE_FORK and +<forks/valkyrie/>.
+#if defined(VALKYRIE_FORK) && __has_include("forks/valkyrie/ValkyrieFork.h")
+#include "forks/valkyrie/ValkyrieFork.h"
+#endif
+
 /**
  * Create module instances here.  If you are adding a new module, you must 'new' it here (or somewhere else)
  */
@@ -252,4 +260,8 @@ void setupModules()
     // NOTE! This module must be added LAST because it likes to check for replies from other modules and avoid sending extra
     // acks
     routingModule = new RoutingModule();
+
+#if defined(VALKYRIE_FORK) && __has_include("forks/valkyrie/ValkyrieFork.h")
+    valkyrie::setupFork();
+#endif
 }

@@ -28,6 +28,16 @@
 #include <functional>
 #include <utility>
 
+#if defined(VALKYRIE_FORK)
+#include "forks/valkyrie/ui/ValkyrieRootMenu.h"
+#include "forks/valkyrie/ui/ValkyrieThreatsMenu.h"
+#include "forks/valkyrie/ui/ValkyrieThreatLogMenu.h"
+#include "forks/valkyrie/ui/ValkyrieThreatLogEntryMenu.h"
+#include "forks/valkyrie/ui/ValkyrieIgnoreListMenu.h"
+#include "forks/valkyrie/ui/ValkyrieIgnoreListEntryMenu.h"
+#include "forks/valkyrie/ui/ValkyrieSettingsMenu.h"
+#endif
+
 extern uint16_t TFT_MESH;
 
 namespace graphics
@@ -2803,6 +2813,32 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case MessageBubblesMenu:
         messageBubblesMenu();
         break;
+#if defined(VALKYRIE_FORK)
+    case ValkyrieRootMenu:
+        valkyrie::showRootMenu();
+        break;
+    case ValkyrieThreatLogMenu:
+        valkyrie::showThreatLogMenu();
+        break;
+    case ValkyrieThreatsMenu:
+        valkyrie::showThreatsMenu();
+        break;
+    case ValkyrieSettingsMenu:
+        valkyrie::showSettingsMenu();
+        break;
+    case ValkyrieConstantScanConfirmMenu:
+        valkyrie::showConstantScanEnableConfirmMenu();
+        break;
+    case ValkyrieThreatLogEntryMenu:
+        valkyrie::showThreatLogEntryMenu();
+        break;
+    case ValkyrieIgnoreListMenu:
+        valkyrie::showIgnoreListMenu();
+        break;
+    case ValkyrieIgnoreListEntryMenu:
+        valkyrie::showIgnoreListEntryMenu();
+        break;
+#endif
     }
     menuQueue = MenuNone;
 }

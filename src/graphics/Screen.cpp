@@ -27,6 +27,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "configuration.h"
 #include "meshUtils.h"
 #if HAS_SCREEN
+#if defined(VALKYRIE_FORK)
+#include "forks/valkyrie/ui/ValkyrieHubFrame.h"
+#include "forks/valkyrie/ui/ValkyrieRootMenu.h"
+#endif
 #include "EInkParallelDisplay.h"
 #include <OLEDDisplay.h>
 
@@ -1244,6 +1248,12 @@ void Screen::setFrames(FrameFocus focus)
         indicatorIcons.push_back(chirpy_small);
     }
 
+#if defined(VALKYRIE_FORK)
+    fsi.positions.valkyrie = numframes;
+    normalFrames[numframes++] = valkyrie::drawHubFrame;
+    indicatorIcons.push_back(icon_module);
+#endif
+
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
     if (!hiddenFrames.wifi && isWifiAvailable()) {
         fsi.positions.wifi = numframes;
@@ -2001,6 +2011,10 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::nodeListMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.wifi) {
                     menuHandler::wifiBaseMenu();
+#if defined(VALKYRIE_FORK)
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.valkyrie) {
+                    valkyrie::showRootMenu();
+#endif
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
@@ -2033,6 +2047,15 @@ bool Screen::isOverlayBannerShowing()
 {
     return NotificationRenderer::isOverlayBannerShowing();
 }
+
+#if defined(VALKYRIE_FORK)
+void Screen::switchToValkyrieHubFrame()
+{
+    if (framesetInfo.positions.valkyrie != 255)
+        ui->switchToFrame(framesetInfo.positions.valkyrie);
+    setFastFramerate();
+}
+#endif
 
 } // namespace graphics
 

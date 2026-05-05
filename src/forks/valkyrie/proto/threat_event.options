@@ -1,0 +1,6 @@
+# nanopb field-size options for threat_event.proto. Read by the
+# nanopb generator (regen-proto.sh). Values must be kept in lock-step
+# with the static buffer sizes baked into proto/generated/threat_event.pb.h.
+valkyrie.BleThreatEvent.mac     max_size:6 fixed_length:true
+valkyrie.BleThreatEvent.name    max_size:32
+valkyrie.BleThreatEvent.detail  max_size:48

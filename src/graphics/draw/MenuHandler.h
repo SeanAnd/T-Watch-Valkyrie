@@ -55,7 +55,17 @@ class menuHandler
         NodeNameLengthMenu,
         FrameToggles,
         DisplayUnits,
-        MessageBubblesMenu
+        MessageBubblesMenu,
+#if defined(VALKYRIE_FORK)
+        ValkyrieRootMenu,
+        ValkyrieThreatLogMenu,
+        ValkyrieThreatsMenu,
+        ValkyrieSettingsMenu,
+        ValkyrieConstantScanConfirmMenu,
+        ValkyrieThreatLogEntryMenu,
+        ValkyrieIgnoreListMenu,
+        ValkyrieIgnoreListEntryMenu
+#endif
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
