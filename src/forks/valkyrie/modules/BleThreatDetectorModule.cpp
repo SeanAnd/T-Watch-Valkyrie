@@ -12,6 +12,7 @@
 #include "../proto/generated/threat_event.pb.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
+#include "RTC.h"
 #include "main.h" // nimbleBluetooth, powerStatus
 #include "mesh/MeshService.h"
 #include "mesh/Router.h"
@@ -566,6 +567,17 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
 
     // sendToPhone, NEVER sendToMesh — Phase 1 is phone-only by design.
     service->sendToPhone(p);
+
+    // Stock Meshtastic apps do not surface PRIVATE_APP as user-visible alerts. Push a
+    // ClientNotification so the companion shows the same style of toast/banner as other events.
+    meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
+    if (cn) {
+        cn->level = meshtastic_LogRecord_Level_WARNING;
+        cn->time = getValidTime(RTCQualityFromNet);
+        snprintf(cn->message, sizeof(cn->message), "Valkyrie: %s %02X:%02X:%02X:%02X:%02X:%02X %d dBm",
+                 threatTypeWireName(cls.type), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi);
+        service->sendClientNotification(cn);
+    }
 }
 
 void BleThreatDetectorModule::reloadPrefs()
