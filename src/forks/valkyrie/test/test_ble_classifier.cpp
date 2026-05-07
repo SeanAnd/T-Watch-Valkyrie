@@ -59,6 +59,28 @@ void test_airtag_extended_1a_ff_4c_00_12()
     EXPECT(r.type == ThreatType::Airtag, "airtag 1A FF 4C 00 12");
 }
 
+// TLV-walk: flags then manufacturer 4C 00 12 19 (no raw sliding at offset 0).
+void test_airtag_tlv_manuf_4c00_1219_after_flags()
+{
+    const uint8_t adv[] = {0x02, 0x01, 0x06, 0x06, 0xFF, 0x4C, 0x00, 0x12, 0x19, 0x00};
+    auto r = valkyrie::classifyAdvertisement(adv, sizeof(adv), "");
+    EXPECT(r.type == ThreatType::Airtag, "airtag TLV FF 4C 00 12 19");
+}
+
+void test_airtag_tlv_manuf_4c00_0719()
+{
+    const uint8_t adv[] = {0x02, 0x01, 0x06, 0x06, 0xFF, 0x4C, 0x00, 0x07, 0x19, 0x00};
+    auto r = valkyrie::classifyAdvertisement(adv, sizeof(adv), "");
+    EXPECT(r.type == ThreatType::Airtag, "airtag TLV FF 4C 00 07 19");
+}
+
+void test_airtag_tlv_manuf_4c00_0f()
+{
+    const uint8_t adv[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x4C, 0x00, 0x0F, 0xAA};
+    auto r = valkyrie::classifyAdvertisement(adv, sizeof(adv), "");
+    EXPECT(r.type == ThreatType::Airtag, "airtag TLV FF 4C 00 0F");
+}
+
 void test_airtag_runs_before_flipper()
 {
     // Apple-ish payload that would match Find My, with a name containing
@@ -254,6 +276,9 @@ int main()
     test_airtag_pattern_1e_ff_4c_00();
     test_airtag_pattern_4c_00_12_19();
     test_airtag_extended_1a_ff_4c_00_12();
+    test_airtag_tlv_manuf_4c00_1219_after_flags();
+    test_airtag_tlv_manuf_4c00_0719();
+    test_airtag_tlv_manuf_4c00_0f();
     test_airtag_runs_before_flipper();
     test_flipper_by_name();
     test_flipper_by_manuf();

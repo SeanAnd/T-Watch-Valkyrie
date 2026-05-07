@@ -25,6 +25,8 @@ forks/valkyrie/
   modules/
     BleThreatDetectorModule.{h,cpp} OSThread that owns the NimBLE scan
     BleClassifier.{h,cpp}           pure: payload -> ThreatType
+    AirtagStalkingState.{h,cpp}     GPS-backed multi-sight + multi-place gate for AirTag
+    GeoStalking.{h,cpp}             readGeoForStalking() (GPS lock or fixed position)
   prefs/
     ValkyriePrefs.{h,cpp}           private NVS namespace via Preferences
   persist/
@@ -32,7 +34,7 @@ forks/valkyrie/
   proto/
     threat_event.proto              fork-local nanopb schema
     generated/                      pre-generated nanopb sources
-  test/                             native unit tests for the classifier
+  test/                             native unit tests (classifier + stalking state)
   userPrefs.valkyrie.jsonc          fork-only defaults (NOT upstream's)
   regen-proto.sh                    fork-only nanopb generator
 ```
@@ -63,7 +65,8 @@ The Valkyrie hub chibi is driven by `BleThreatDetectorModule` timing, not redraw
 What actually ships in this fork today.
 
 - **BLE-only passive scan.** The 2.4 GHz radio is shared with the existing NimBLE GATT server, so scanning piggybacks on it.
-- **Classifier** (ported from `WiFiScan.cpp` lines 894-989 of upstream ESP32Valkyrie where applicable): AirTag / Find My, Flipper Zero, HC-03/05/06 skimmer, Flock camera, Meta Ray-Ban / Quest smart glasses, drone RemoteID broadcasts over BLE. Wi-Fi-side RemoteID parsing stays Phase 2 (future).
+- **Classifier** (ported from `WiFiScan.cpp` lines 894-989 of upstream ESP32Valkyrie where applicable): AirTag / Find My (TLV-aware manufacturer `0x004C` parsing plus legacy sliding-window fallbacks, including `4C 00 07 19` style payloads), Flipper Zero, HC-03/05/06 skimmer, Flock camera, Meta Ray-Ban / Quest smart glasses, drone RemoteID broadcasts over BLE. Wi-Fi-side RemoteID parsing stays Phase 2 (future).
+- **AirTag + GPS stalking gate:** when `readGeoForStalking()` is true (GPS lock **or** `config.position.fixed_position`, with non-zero lat/lon), **only** `ThreatType::Airtag` must satisfy an AirGuard-style rule before log/haptic/phone emit: at least `stalkMinSightings` (default 3) sightings and at least `stalkMinDistinctPlaces` (default 2) distinct ~`stalkMinSeparationM` metre grid cells for the same BLE MAC. Without usable position, AirTag behaves like other threats: pattern match + `dedupeWindowSecs` only. Correlation is **by MAC**; resolvable private addresses still rotate, so this is best-effort (same limitation as the ignore list). Thresholds live in NVS (`stk_sig`, `stk_plc`, `stk_sep`, `stk_ttl`) with defaults in `ValkyriePrefs::defaults()` / `userPrefs.valkyrie.jsonc`.
 - **Power-aware scheduling:** duty-cycled scan window (defaults ~10 s scan every ~30 s between window starts; idle gap is `max(0, scanIntervalSecs - scanWindowSecs)` in NVS), gated on `PowerFSM` state and battery percentage, aborted on `notifyDeepSleep` / `notifyLightSleep`.
 - **Sink:** detections written to `/valkyrie/threats.log` on LittleFS (rotate at 32 KB). The intent is to also emit them to the paired phone over `meshtastic_PortNum_PRIVATE_APP` via `service->sendToPhone()` (we never call `sendToMesh()`; stays off the LoRa channel). **That phone path is broken in practice right now;** see [Known issues](#known-issues).
 - **Valkyrie menu:** Bluetooth toggle, WiFi toggle (when the build has WiFi), **Settings** (enable/disable detector, constant vs interval BLE scan), **Threat log** (paged viewer over the on-device CSV), **Threats** (per threat-type scan toggles, persisted in NVS), **Ignored devices** (ignore list UI).
@@ -75,15 +78,13 @@ What actually ships in this fork today.
 
 - **Meshtastic app not getting threat “notifications.”** I’m not seeing detections show up in the stock Meshtastic companion app the way you’d expect for a phone alert, even though the fork tries to push threat events over `PRIVATE_APP` / `sendToPhone()`. Could be decoding on the app side, port handling, protobuf registration, or something else in the chain. Needs a proper pass (and may need a forked or extended client if the official app never surfaces that port the way we need).
 
-- **Heartbeat signal / tier stability.** It still jumps between weak / medium / strong more than I’d like: 15-20 dB of swing is normal in the real world and the EMA only does so much. More smoothing, hysteresis, or a different mapping from RSSI to tier would help.
-
 ## Future plans
 
 Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-Extra logic for **AirTags** so we only warn if they appear to be **following** the user. AirTags alone are plentiful and can mean constant warnings / false positives. Better to avoid alert exhaustion. If an AirTag shows up multiple times in an interval, or GPS is enabled, we could track proximity/distance to judge a genuine stalking pattern (probably similar to how Apple/Android reason about it).
+**Partially shipped:** GPS-backed multi-sight + multi-place stalking gate for AirTag (see Features). Remaining ideas: stable tracker identity across **rotating** BLE addresses (payload-derived fingerprint), tighter neighbour vs stalker discrimination, and optional “must span multiple scan windows” heuristics.
 
 ### Phase 3 (the UI / gamification phase)
 

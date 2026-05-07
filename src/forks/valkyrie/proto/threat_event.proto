@@ -49,4 +49,12 @@ message BleThreatEvent {
     // Free-form short string describing why we matched (e.g. "manuf
     // 0x0FBA", "FF 4C 00 12"). Optional.
     string detail = 6;
+
+    // When true, this emit satisfied GPS-backed multi-sight + multi-place
+    // AirTag stalking thresholds (see ValkyriePrefs stalk_* keys).
+    bool stalking_gps_triggered = 7;
+
+    // Snapshot counts at emit time (same MAC bucket in AirtagStalkingState).
+    uint32 stalking_sightings = 8;
+    uint32 stalking_distinct_places = 9;
 }

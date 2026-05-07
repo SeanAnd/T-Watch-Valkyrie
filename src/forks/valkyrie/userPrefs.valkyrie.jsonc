@@ -34,5 +34,11 @@
     "threatDetectionHapticEnabled": true,
 
     // passive threat detection only, HAS_I2S builds; NVS key thr_snd
-    "threatDetectionSoundEnabled": true
+    "threatDetectionSoundEnabled": true,
+
+    // AirTag GPS stalking gate (NVS keys stk_sig, stk_plc, stk_sep, stk_ttl)
+    "stalkMinSightings": 3,
+    "stalkMinDistinctPlaces": 2,
+    "stalkMinSeparationM": 75,
+    "stalkEntryTtlSecs": 172800
 }

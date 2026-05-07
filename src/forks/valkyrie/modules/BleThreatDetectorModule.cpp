@@ -3,7 +3,9 @@
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
 #include "../HeartbeatRssiFilter.h"
+#include "AirtagStalkingState.h"
 #include "BleScanSchedule.h"
+#include "GeoStalking.h"
 #include "../ThreatTypeUi.h"
 #include "../persist/ThreatIgnoreList.h"
 #include "../persist/ThreatLog.h"
@@ -20,6 +22,7 @@
 #include <NimBLEDevice.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace valkyrie
@@ -391,16 +394,23 @@ int32_t BleThreatDetectorModule::runOnce()
             scan->clearResults();
             lastScanWindowEndMs = millis();
             LOG_DEBUG("Valkyrie: scan window complete (%u detections so far)", (unsigned)totalDetections);
-        } else {
-            uint32_t elapsedMs = millis() - scanStartedMs;
-            uint32_t hardCapMs = (uint32_t)prefs.scanWindowSecs * 1000U + 2000U;
-            if (elapsedMs > hardCapMs) {
-                // Belt and braces: stop on our timer in case NimBLE
-                // didn't honour the duration arg (rare, but cheaper to
-                // be defensive than to debug a stuck scan).
-                LOG_WARN("Valkyrie: scan exceeded hard cap, forcing stop");
-                stopScanWindow();
+            // Constant scan: start the next window in this same tick so `scanActive`
+            // does not stay false until the next runOnce (~1000ms), which caused the
+            // hub/UI to flash Sleeping between chained windows despite gapMs==0.
+            if (prefs.constantBleScanMode && shouldScan()) {
+                initScanIfNeeded();
+                startScanWindow();
             }
+            return 1000;
+        }
+        uint32_t elapsedMs = millis() - scanStartedMs;
+        uint32_t hardCapMs = (uint32_t)prefs.scanWindowSecs * 1000U + 2000U;
+        if (elapsedMs > hardCapMs) {
+            // Belt and braces: stop on our timer in case NimBLE
+            // didn't honour the duration arg (rare, but cheaper to
+            // be defensive than to debug a stuck scan).
+            LOG_WARN("Valkyrie: scan exceeded hard cap, forcing stop");
+            stopScanWindow();
         }
         // Tick again soon while a scan is in flight so we notice the
         // completion promptly without holding the watchdog.
@@ -472,17 +482,32 @@ bool BleThreatDetectorModule::tryAdmitDetection(const uint8_t mac[6], ThreatType
     return true;
 }
 
-void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi)
+void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
+                                            int32_t rssi, bool gpsStalkingTrigger, uint32_t gpsStalkingSightings,
+                                            uint32_t gpsStalkingPlaces)
 {
     ++totalDetections;
+
+    char detailBuf[sizeof(ClassificationResult::detail)] = {0};
+    if (gpsStalkingTrigger) {
+        if (cls.detail[0])
+            snprintf(detailBuf, sizeof detailBuf, "%s [gps-stk %u/%u]", cls.detail, (unsigned)gpsStalkingSightings,
+                     (unsigned)gpsStalkingPlaces);
+        else
+            snprintf(detailBuf, sizeof detailBuf, "[gps-stk %u/%u]", (unsigned)gpsStalkingSightings,
+                     (unsigned)gpsStalkingPlaces);
+    } else {
+        strncpy(detailBuf, cls.detail, sizeof detailBuf - 1);
+        detailBuf[sizeof detailBuf - 1] = '\0';
+    }
 
     uint32_t tsSecs = millis() / 1000U;
 
     // 1. Local persistence.
-    ThreatLog::append(tsSecs, threatTypeWireName(cls.type), mac, name, rssi, cls.detail);
+    ThreatLog::append(tsSecs, threatTypeWireName(cls.type), mac, name, rssi, detailBuf);
 
-    LOG_INFO("Valkyrie: threat=%s mac=%02X:%02X:%02X:%02X:%02X:%02X rssi=%d name=\"%s\" detail=\"%s\"", threatTypeWireName(cls.type), mac[0],
-             mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi, name ? name : "", cls.detail);
+    LOG_INFO("Valkyrie: threat=%s mac=%02X:%02X:%02X:%02X:%02X:%02X rssi=%d name=\"%s\" detail=\"%s\"", threatTypeWireName(cls.type),
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi, name ? name : "", detailBuf);
 
 #if defined(HAS_DRV2605) && defined(T_WATCH_S3)
     if (prefs.threatDetectionHapticEnabled)
@@ -509,10 +534,13 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
         ev.name[sizeof(ev.name) - 1] = '\0';
     }
     ev.rssi = rssi;
-    if (cls.detail[0]) {
-        strncpy(ev.detail, cls.detail, sizeof(ev.detail) - 1);
+    if (detailBuf[0]) {
+        strncpy(ev.detail, detailBuf, sizeof(ev.detail) - 1);
         ev.detail[sizeof(ev.detail) - 1] = '\0';
     }
+    ev.stalking_gps_triggered = gpsStalkingTrigger;
+    ev.stalking_sightings = gpsStalkingSightings;
+    ev.stalking_distinct_places = gpsStalkingPlaces;
 
     meshtastic_MeshPacket *p = router->allocForSending();
     if (!p) {
@@ -619,6 +647,25 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
 
     if (ThreatIgnoreList::isIgnored(cls.type, mac))
         return;
+
+    if (cls.type == ThreatType::Airtag) {
+        int32_t lat_i = 0;
+        int32_t lon_i = 0;
+        if (readGeoForStalking(&lat_i, &lon_i)) {
+            AirtagStalkingConfig sc{};
+            sc.minSightings = prefs.stalkMinSightings;
+            sc.minDistinctPlaces = prefs.stalkMinDistinctPlaces;
+            sc.minSeparationM = prefs.stalkMinSeparationM;
+            sc.entryTtlSecs = prefs.stalkEntryTtlSecs;
+            AirtagStalkingGateResult gr = airtagStalking.recordSighting(mac, lat_i, lon_i, millis(), sc);
+            if (!gr.allowEmit)
+                return;
+            if (!tryAdmitDetection(mac, cls.type))
+                return;
+            emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), true, gr.sightings, gr.distinctPlaces);
+            return;
+        }
+    }
 
     if (!tryAdmitDetection(mac, cls.type))
         return; // dedupe-throttled

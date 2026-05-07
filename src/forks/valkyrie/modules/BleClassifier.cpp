@@ -37,37 +37,6 @@ void setDetail(ClassificationResult &out, const char *s)
     out.detail[sizeof(out.detail) - 1] = '\0';
 }
 
-bool detectAirtag(const uint8_t *p, size_t len, const char *&detailOut)
-{
-    if (!p || len < 4)
-        return false;
-    for (size_t i = 0; i + 4 <= len; ++i) {
-        // Standard Find My network header: 1E FF 4C 00
-        if (p[i] == 0x1E && p[i + 1] == 0xFF && p[i + 2] == 0x4C && p[i + 3] == 0x00) {
-            detailOut = "Apple Find My (1E FF 4C 00)";
-            return true;
-        }
-        // Alternative pattern: 4C 00 12 19
-        if (p[i] == 0x4C && p[i + 1] == 0x00 && p[i + 2] == 0x12 && p[i + 3] == 0x19) {
-            detailOut = "Apple Find My (4C 00 12 19)";
-            return true;
-        }
-        // Extended Find My: length 1A, type FF, company 00 4C, type 12
-        if (i + 5 <= len && p[i] == 0x1A && p[i + 1] == 0xFF && p[i + 2] == 0x4C && p[i + 3] == 0x00 && p[i + 4] == 0x12) {
-            detailOut = "Apple Find My (1A FF 4C 00 12)";
-            return true;
-        }
-        // Manuf 0x004C followed by a Find My payload type (0x12, 0x10, 0x0F).
-        if (i + 5 <= len && p[i] == 0xFF && p[i + 1] == 0x4C && p[i + 2] == 0x00) {
-            if (i + 4 < len && (p[i + 3] == 0x12 || p[i + 3] == 0x10 || p[i + 3] == 0x0F)) {
-                detailOut = "Apple Find My (FF 4C 00 12/10/0F)";
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 bool detectFlipperByManuf(const uint8_t *p, size_t len, const char *&detailOut)
 {
     if (!p || len < 5)
@@ -175,6 +144,68 @@ template <typename Fn> bool walkAdRecords(const uint8_t *p, size_t len, Fn fn)
         if (fn(adType, adData, adDataLen))
             return true;
         i += 1 + (size_t)adLen;
+    }
+    return false;
+}
+
+// Apple company ID 0x004C (LE) in manufacturer specific data (after AD type 0xFF).
+// `data` / `dataLen` are the manufacturer payload (company id + Apple bytes).
+bool matchAppleFindMyManufacturerPayload(const uint8_t *data, size_t dataLen, const char *&detailOut)
+{
+    if (!data || dataLen < 3)
+        return false;
+    if (data[0] != 0x4C || data[1] != 0x00)
+        return false;
+    if (dataLen >= 4 && data[2] == 0x12 && data[3] == 0x19) {
+        detailOut = "Apple Find My (4C 00 12 19)";
+        return true;
+    }
+    if (dataLen >= 4 && data[2] == 0x07 && data[3] == 0x19) {
+        detailOut = "Apple Find My (4C 00 07 19)";
+        return true;
+    }
+    if (data[2] == 0x12 || data[2] == 0x10 || data[2] == 0x0F) {
+        detailOut = "Apple Find My (FF 4C 00 12/10/0F)";
+        return true;
+    }
+    return false;
+}
+
+bool detectAirtag(const uint8_t *p, size_t len, const char *&detailOut)
+{
+    if (!p || len < 4)
+        return false;
+
+    if (walkAdRecords(p, len, [&](uint8_t adType, const uint8_t *data, size_t dataLen) -> bool {
+            if (adType != 0xFF)
+                return false;
+            return matchAppleFindMyManufacturerPayload(data, dataLen, detailOut);
+        }))
+        return true;
+
+    for (size_t i = 0; i + 4 <= len; ++i) {
+        if (p[i] == 0x1E && p[i + 1] == 0xFF && p[i + 2] == 0x4C && p[i + 3] == 0x00) {
+            detailOut = "Apple Find My (1E FF 4C 00)";
+            return true;
+        }
+        if (p[i] == 0x4C && p[i + 1] == 0x00 && p[i + 2] == 0x12 && p[i + 3] == 0x19) {
+            detailOut = "Apple Find My (4C 00 12 19)";
+            return true;
+        }
+        if (p[i] == 0x4C && p[i + 1] == 0x00 && p[i + 2] == 0x07 && p[i + 3] == 0x19) {
+            detailOut = "Apple Find My (4C 00 07 19)";
+            return true;
+        }
+        if (i + 5 <= len && p[i] == 0x1A && p[i + 1] == 0xFF && p[i + 2] == 0x4C && p[i + 3] == 0x00 && p[i + 4] == 0x12) {
+            detailOut = "Apple Find My (1A FF 4C 00 12)";
+            return true;
+        }
+        if (i + 5 <= len && p[i] == 0xFF && p[i + 1] == 0x4C && p[i + 2] == 0x00) {
+            if (i + 4 < len && (p[i + 3] == 0x12 || p[i + 3] == 0x10 || p[i + 3] == 0x0F)) {
+                detailOut = "Apple Find My (FF 4C 00 12/10/0F)";
+                return true;
+            }
+        }
     }
     return false;
 }

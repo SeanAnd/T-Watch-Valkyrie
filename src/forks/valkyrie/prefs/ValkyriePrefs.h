@@ -29,6 +29,13 @@ struct ValkyriePrefs {
     bool threatDetectionHapticEnabled; // NVS key thr_hapt
     bool threatDetectionSoundEnabled;  // NVS key thr_snd
 
+    // AirTag-only: when GPS (or fixed position) is usable, require this many
+    // sightings at least this many distinct place cells before emit. NVS keys stk_*.
+    uint8_t stalkMinSightings;
+    uint8_t stalkMinDistinctPlaces;
+    uint16_t stalkMinSeparationM;
+    uint32_t stalkEntryTtlSecs;
+
     // Load with defaults seeded if nothing has ever been written.
     static ValkyriePrefs load();
 

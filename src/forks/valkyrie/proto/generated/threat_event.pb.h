@@ -49,6 +49,9 @@ typedef struct _valkyrie_BleThreatEvent {
     /* Free-form short string describing why we matched (e.g. "manuf
  0x0FBA", "FF 4C 00 12"). Optional. */
     char detail[48];
+    bool stalking_gps_triggered;
+    uint32_t stalking_sightings;
+    uint32_t stalking_distinct_places;
 } valkyrie_BleThreatEvent;
 
 
@@ -63,8 +66,8 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define valkyrie_BleThreatEvent_init_default     {0, _valkyrie_ThreatType_MIN, {0}, "", 0, ""}
-#define valkyrie_BleThreatEvent_init_zero        {0, _valkyrie_ThreatType_MIN, {0}, "", 0, ""}
+#define valkyrie_BleThreatEvent_init_default     {0, _valkyrie_ThreatType_MIN, {0}, "", 0, "", false, 0, 0}
+#define valkyrie_BleThreatEvent_init_zero        {0, _valkyrie_ThreatType_MIN, {0}, "", 0, "", false, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define valkyrie_BleThreatEvent_timestamp_tag    1
@@ -73,6 +76,9 @@ extern "C" {
 #define valkyrie_BleThreatEvent_name_tag         4
 #define valkyrie_BleThreatEvent_rssi_tag         5
 #define valkyrie_BleThreatEvent_detail_tag       6
+#define valkyrie_BleThreatEvent_stalking_gps_triggered_tag 7
+#define valkyrie_BleThreatEvent_stalking_sightings_tag 8
+#define valkyrie_BleThreatEvent_stalking_distinct_places_tag 9
 
 /* Struct field encoding specification for nanopb */
 #define valkyrie_BleThreatEvent_FIELDLIST(X, a) \
@@ -81,7 +87,10 @@ X(a, STATIC,   SINGULAR, UENUM,    type,              2) \
 X(a, STATIC,   SINGULAR, FIXED_LENGTH_BYTES, mac,               3) \
 X(a, STATIC,   SINGULAR, STRING,   name,              4) \
 X(a, STATIC,   SINGULAR, SINT32,   rssi,              5) \
-X(a, STATIC,   SINGULAR, STRING,   detail,            6)
+X(a, STATIC,   SINGULAR, STRING,   detail,            6) \
+X(a, STATIC,   SINGULAR, BOOL,     stalking_gps_triggered, 7) \
+X(a, STATIC,   SINGULAR, UINT32,   stalking_sightings, 8) \
+X(a, STATIC,   SINGULAR, UINT32,   stalking_distinct_places, 9)
 #define valkyrie_BleThreatEvent_CALLBACK NULL
 #define valkyrie_BleThreatEvent_DEFAULT NULL
 
@@ -97,9 +106,11 @@ extern const pb_msgdesc_t valkyrie_BleThreatEvent_msg;
 /* name:       tag(1) + len(1) + 32         = 34 */
 /* rssi:       tag(1) + sint32 varint(<=5)  =  6 */
 /* detail:     tag(1) + len(1) + 48         = 50 */
-/* total                                    = 107, round up for safety */
+/* stalk bool: tag(1) + bool                =  2 */
+/* stalk u32 x2: tag+varint ~ 12           = 12 */
+/* total                                    ~130 */
 #define VALKYRIE_THREAT_EVENT_PB_H_MAX_SIZE valkyrie_BleThreatEvent_size
-#define valkyrie_BleThreatEvent_size             110
+#define valkyrie_BleThreatEvent_size             135
 
 #ifdef __cplusplus
 } /* extern "C" */

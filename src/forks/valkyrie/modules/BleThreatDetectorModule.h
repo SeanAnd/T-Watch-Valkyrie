@@ -6,6 +6,7 @@
 
 #include "../HeartbeatSignalTier.h"
 #include "../prefs/ValkyriePrefs.h"
+#include "AirtagStalkingState.h"
 #include "BleClassifier.h"
 #include "Observer.h"
 #include "concurrency/OSThread.h"
@@ -106,9 +107,11 @@ class BleThreatDetectorModule : private concurrency::OSThread
 
     bool tryAdmitDetection(const uint8_t mac[6], ThreatType type);
 
-    void emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi);
+    void emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi,
+                       bool gpsStalkingTrigger = false, uint32_t gpsStalkingSightings = 0, uint32_t gpsStalkingPlaces = 0);
 
     ValkyriePrefs prefs;
+    AirtagStalkingState airtagStalking;
 
     // Scan state.
     NimBLEScan *scan = nullptr;
