@@ -21,9 +21,11 @@ void showSettingsMenu()
     ValkyriePrefs prefs = ValkyriePrefs::load();
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptWifiThreatScan, OptNotifications };
-    static char wifiScanLabel[44];
-    snprintf(wifiScanLabel, sizeof(wifiScanLabel), "WiFi threat scan: %s", prefs.wifiThreatScanEnabled ? "On" : "Off");
+    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptWifiThreatPhase, OptNotifications };
+    static char blePhaseLabel[36];
+    static char wifiPhaseLabel[38];
+    snprintf(blePhaseLabel, sizeof(blePhaseLabel), "BLE threat phase: %s", prefs.bleThreatPhaseEnabled ? "On" : "Off");
+    snprintf(wifiPhaseLabel, sizeof(wifiPhaseLabel), "WiFi threat phase: %s", prefs.wifiThreatPhaseEnabled ? "On" : "Off");
 
     static char detectorToggleLabel[28];
     snprintf(detectorToggleLabel, sizeof(detectorToggleLabel), "%s detector", prefs.bleThreatDetectorEnabled ? "Disable" : "Enable");
@@ -31,8 +33,70 @@ void showSettingsMenu()
     static char constantScanLabel[40];
     snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
 
-    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, wifiScanLabel, "Notifications"};
-    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptWifiThreatScan, OptNotifications};
+    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, blePhaseLabel, wifiPhaseLabel, "Notifications"};
+    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptWifiThreatPhase,
+                        OptNotifications};
+
+    graphics::BannerOverlayOptions bannerOptions{};
+    bannerOptions.message = "Valkyrie settings";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsEnumPtr = enums;
+    bannerOptions.optionsCount = 6;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == OptBack) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieRootMenu;
+            screen->runNow();
+        } else if (selected == OptToggleDetector) {
+            ValkyriePrefs p = ValkyriePrefs::load();
+            p.bleThreatDetectorEnabled = !p.bleThreatDetectorEnabled;
+            p.save();
+            syncBleThreatDetectorFromPrefs();
+            screen->showSimpleBanner("Saved.", 4000);
+        } else if (selected == OptConstantScan) {
+            ValkyriePrefs p = ValkyriePrefs::load();
+            if (p.constantBleScanMode) {
+                p.constantBleScanMode = false;
+                p.save();
+                if (bleThreatDetector)
+                    bleThreatDetector->reloadPrefs();
+                screen->showSimpleBanner("Saved.", 4000);
+            } else {
+                graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieConstantScanConfirmMenu;
+                screen->runNow();
+            }
+        } else if (selected == OptBleThreatPhase) {
+            ValkyriePrefs p = ValkyriePrefs::load();
+            p.bleThreatPhaseEnabled = !p.bleThreatPhaseEnabled;
+            p.save();
+            if (bleThreatDetector)
+                bleThreatDetector->reloadPrefs();
+            screen->showSimpleBanner("Saved.", 4000);
+        } else if (selected == OptWifiThreatPhase) {
+            ValkyriePrefs p = ValkyriePrefs::load();
+            p.wifiThreatPhaseEnabled = !p.wifiThreatPhaseEnabled;
+            p.save();
+            if (bleThreatDetector)
+                bleThreatDetector->reloadPrefs();
+            screen->showSimpleBanner("Saved.", 4000);
+        } else if (selected == OptNotifications) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+#else
+    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptNotifications };
+    static char blePhaseLabel[36];
+    snprintf(blePhaseLabel, sizeof(blePhaseLabel), "BLE threat phase: %s", prefs.bleThreatPhaseEnabled ? "On" : "Off");
+
+    static char detectorToggleLabel[28];
+    snprintf(detectorToggleLabel, sizeof(detectorToggleLabel), "%s detector", prefs.bleThreatDetectorEnabled ? "Disable" : "Enable");
+
+    static char constantScanLabel[40];
+    snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
+
+    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, blePhaseLabel, "Notifications"};
+    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptNotifications};
 
     graphics::BannerOverlayOptions bannerOptions{};
     bannerOptions.message = "Valkyrie settings";
@@ -61,57 +125,13 @@ void showSettingsMenu()
                 graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieConstantScanConfirmMenu;
                 screen->runNow();
             }
-        } else if (selected == OptWifiThreatScan) {
+        } else if (selected == OptBleThreatPhase) {
             ValkyriePrefs p = ValkyriePrefs::load();
-            p.wifiThreatScanEnabled = !p.wifiThreatScanEnabled;
+            p.bleThreatPhaseEnabled = !p.bleThreatPhaseEnabled;
             p.save();
             if (bleThreatDetector)
                 bleThreatDetector->reloadPrefs();
             screen->showSimpleBanner("Saved.", 4000);
-        } else if (selected == OptNotifications) {
-            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
-            screen->runNow();
-        }
-    };
-    screen->showOverlayBanner(bannerOptions);
-#else
-    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptNotifications };
-    static char detectorToggleLabel[28];
-    snprintf(detectorToggleLabel, sizeof(detectorToggleLabel), "%s detector", prefs.bleThreatDetectorEnabled ? "Disable" : "Enable");
-
-    static char constantScanLabel[40];
-    snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
-
-    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, "Notifications"};
-    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptNotifications};
-
-    graphics::BannerOverlayOptions bannerOptions{};
-    bannerOptions.message = "Valkyrie settings";
-    bannerOptions.optionsArrayPtr = labels;
-    bannerOptions.optionsEnumPtr = enums;
-    bannerOptions.optionsCount = 4;
-    bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == OptBack) {
-            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieRootMenu;
-            screen->runNow();
-        } else if (selected == OptToggleDetector) {
-            ValkyriePrefs p = ValkyriePrefs::load();
-            p.bleThreatDetectorEnabled = !p.bleThreatDetectorEnabled;
-            p.save();
-            syncBleThreatDetectorFromPrefs();
-            screen->showSimpleBanner("Saved.", 4000);
-        } else if (selected == OptConstantScan) {
-            ValkyriePrefs p = ValkyriePrefs::load();
-            if (p.constantBleScanMode) {
-                p.constantBleScanMode = false;
-                p.save();
-                if (bleThreatDetector)
-                    bleThreatDetector->reloadPrefs();
-                screen->showSimpleBanner("Saved.", 4000);
-            } else {
-                graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieConstantScanConfirmMenu;
-                screen->runNow();
-            }
         } else if (selected == OptNotifications) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
             screen->runNow();

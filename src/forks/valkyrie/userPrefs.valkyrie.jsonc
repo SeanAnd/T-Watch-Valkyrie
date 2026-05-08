@@ -27,6 +27,9 @@
     // bits 0..5 enable Airtag..Drone threat scanning (0x3F = all on); NVS key scan_msk
     "threatScanMask": 63,
 
+    // NimBLE passive window each duty pass when true; NVS key ble_phs
+    "bleThreatPhaseEnabled": true,
+
     // no idle gap between BLE scan windows when true (higher power); NVS key const_scn
     "constantBleScanMode": false,
 
@@ -42,8 +45,8 @@
     "stalkMinSeparationM": 75,
     "stalkEntryTtlSecs": 172800,
 
-    // Wi‑Fi promiscuous phase (end of each BLE duty pass); NVS keys wifi_en, wifi_msk, wifi_ms, wifi_dw
-    "wifiThreatScanEnabled": true,
+    // Wi‑Fi promiscuous phase (after BLE window or standalone); NVS keys wifi_en, wifi_msk, wifi_ms, wifi_dw
+    "wifiThreatPhaseEnabled": true,
     "wifiThreatScanMask": 31,
     // Default matches scanWindowSecs (10 s) → 10000 ms; see ValkyriePrefs::defaults().
     "wifiThreatPassMs": 10000,

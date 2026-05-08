@@ -2,6 +2,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
+#include "HubThreatAnimTiming.h"
 #include "WifiThreatPass.h"
 #include "../HeartbeatRssiFilter.h"
 #include "AirtagStalkingState.h"
@@ -127,6 +128,27 @@ class BleScanCallback : public NimBLEAdvertisedDeviceCallbacks
 };
 
 static BleScanCallback g_scanCallback;
+
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+static bool wifiPhaseShouldRun(const ValkyriePrefs &p)
+{
+    return p.wifiThreatPhaseEnabled && p.isWifiThreatPassConfigured();
+}
+#else
+static bool wifiPhaseShouldRun(const ValkyriePrefs &)
+{
+    return false;
+}
+#endif
+
+static bool anyDutyThreatWork(const ValkyriePrefs &p)
+{
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+    return p.bleThreatPhaseEnabled || wifiPhaseShouldRun(p);
+#else
+    return p.bleThreatPhaseEnabled;
+#endif
+}
 
 // ----------------------------------------------------------------------------
 // Construction / destruction
@@ -522,8 +544,9 @@ int32_t BleThreatDetectorModule::runOnce()
             finalizeDutyThreatPass();
             LOG_DEBUG("Valkyrie: scan window complete (%u detections so far)", (unsigned)totalDetections);
             if (wifiThreatPassActive)
-                deferredConstantBleScanRestart = prefs.constantBleScanMode && shouldScan();
-            else if (prefs.constantBleScanMode && shouldScan()) {
+                deferredConstantBleScanRestart =
+                    prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled && shouldScan();
+            else if (prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled && shouldScan()) {
                 initScanIfNeeded();
                 startScanWindow();
             }
@@ -539,8 +562,9 @@ int32_t BleThreatDetectorModule::runOnce()
             haltBleScan();
             finalizeDutyThreatPass();
             if (wifiThreatPassActive)
-                deferredConstantBleScanRestart = prefs.constantBleScanMode && shouldScan();
-            else if (prefs.constantBleScanMode && shouldScan()) {
+                deferredConstantBleScanRestart =
+                    prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled && shouldScan();
+            else if (prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled && shouldScan()) {
                 initScanIfNeeded();
                 startScanWindow();
             }
@@ -556,13 +580,11 @@ int32_t BleThreatDetectorModule::runOnce()
         return 30 * 1000;
     }
 
-    initScanIfNeeded();
-    if (!scanInitialised) {
-        // GATT server not up yet, try again in a bit.
-        return 5 * 1000;
+    if (!anyDutyThreatWork(prefs)) {
+        return 30 * 1000;
     }
 
-    // Idle between windows (see ble_scan_schedule::idleGapMsAfterWindow; zero when constantBleScanMode).
+    // Idle between passes (BLE window and/or Wi‑Fi phase); gap may be 0 only when constant BLE chaining is active.
     if (lastScanWindowEndMs != 0) {
         uint32_t gapMs = ble_scan_schedule::idleGapMsAfterWindow(prefs);
         uint32_t now = millis();
@@ -573,6 +595,22 @@ int32_t BleThreatDetectorModule::runOnce()
             uint32_t tick = remain > 60000U ? 60000U : remain;
             return (int32_t)tick;
         }
+    }
+
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+    if (!prefs.bleThreatPhaseEnabled && wifiPhaseShouldRun(prefs)) {
+        passNotificationBuffer.clear();
+        passNotificationBatchOpen = true;
+        hubBleWindowEndMs = millis() - kHubBleScanStripOutroMs;
+        finalizeDutyThreatPass();
+        return wifiThreatPassActive ? kWifiThreatPollMs : 1000;
+    }
+#endif
+
+    initScanIfNeeded();
+    if (!scanInitialised) {
+        // GATT server not up yet, try again in a bit.
+        return 5 * 1000;
     }
 
     startScanWindow();

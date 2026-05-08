@@ -98,13 +98,13 @@ void showThreatsMenu()
             const bool wasEnabled = p.isThreatTypeEnabled(t);
             p.setThreatTypeEnabled(t, !wasEnabled);
             if (!wasEnabled && t == ThreatType::Flock)
-                p.wifiThreatScanEnabled = true;
+                p.wifiThreatPhaseEnabled = true;
         } else if (row < (int)kTotalRows) {
             ThreatType t = kWifiThreatOrder[(size_t)row - kNumBleThreatTypes];
             const bool wasEnabled = p.isWifiThreatTypeEnabled(t);
             p.setWifiThreatTypeEnabled(t, !wasEnabled);
             if (!wasEnabled)
-                p.wifiThreatScanEnabled = true;
+                p.wifiThreatPhaseEnabled = true;
         } else {
             return;
         }

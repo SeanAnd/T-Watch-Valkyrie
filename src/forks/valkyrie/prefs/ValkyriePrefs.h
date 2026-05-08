@@ -22,8 +22,11 @@ struct ValkyriePrefs {
     static constexpr uint8_t kThreatScanMaskAll = 0x3F;
     uint8_t threatScanMask;
 
-    // Wi‑Fi promiscuous phase (end of each duty pass). Master switch default off — disrupts STA briefly.
-    bool wifiThreatScanEnabled;
+    /// When false, skip the NimBLE passive scan window; Wi‑Fi-only duty may still run (HAS_WIFI).
+    bool bleThreatPhaseEnabled;
+
+    // Wi‑Fi promiscuous phase (end of BLE window, or standalone when BLE phase is off). Brief STA disruption.
+    bool wifiThreatPhaseEnabled;
     /// Bits 0..4 enable ThreatType::WifiDeauth..WifiMultiSsid (7..11).
     static constexpr uint8_t kWifiThreatScanMaskAll = 0x1F;
     uint8_t wifiThreatScanMask;
@@ -109,7 +112,7 @@ inline void ValkyriePrefs::setWifiThreatTypeEnabled(ThreatType t, bool on)
 
 inline bool ValkyriePrefs::isWifiThreatPassConfigured() const
 {
-    if (!wifiThreatScanEnabled)
+    if (!wifiThreatPhaseEnabled)
         return false;
     if (isThreatTypeEnabled(ThreatType::Flock))
         return true;

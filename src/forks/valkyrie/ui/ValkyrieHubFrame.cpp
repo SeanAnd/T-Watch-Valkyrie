@@ -9,6 +9,7 @@
 #include "modules/BleThreatDetectorModule.h"
 #include "persist/ThreatLog.h"
 #include "prefs/ValkyriePrefs.h"
+#include "../modules/HubThreatAnimTiming.h"
 #include "graphics/SharedUIDisplay.h"
 #include "sprites/idle_rgb565.h"
 #include "sprites/scan_ble_loop_rgb565.h"
@@ -31,8 +32,8 @@ constexpr unsigned kLoopFrameCount = 3;
 /// Per-frame hold for BLE start/outro clips only (loops use kFrameMsLoop).
 constexpr uint32_t kFrameMsIntro = 160;
 constexpr uint32_t kFrameMsLoop = 80;
-constexpr uint32_t kIntroTotalMs = kBleStartFrameCount * kFrameMsIntro;
-constexpr uint32_t kOutroTotalMs = kBleStartFrameCount * kFrameMsIntro;
+constexpr uint32_t kIntroTotalMs = kHubBleScanStripOutroMs;
+constexpr uint32_t kOutroTotalMs = kHubBleScanStripOutroMs;
 
 static const uint16_t *const kStartBleScanFrames[kBleStartFrameCount] = {
     idle_rgb565,
@@ -268,8 +269,12 @@ void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, in
             status = "Scanning BLE";
         } else if (bleThreatDetector->isWifiThreatPassActive()) {
             status = "Scanning WiFi";
-        } else if (!prefs.wifiThreatScanEnabled) {
-            status = "WiFi scan off";
+        } else if (!prefs.bleThreatPhaseEnabled && !prefs.wifiThreatPhaseEnabled) {
+            status = "Threat phases off";
+        } else if (!prefs.bleThreatPhaseEnabled) {
+            status = "BLE phase off";
+        } else if (!prefs.wifiThreatPhaseEnabled) {
+            status = "WiFi phase off";
         } else if (!prefs.isWifiThreatPassConfigured()) {
             status = "WiFi types off";
         } else {

@@ -24,6 +24,7 @@ static constexpr const char *kKeyStalkSight = "stk_sig";
 static constexpr const char *kKeyStalkPlaces = "stk_plc";
 static constexpr const char *kKeyStalkSepM = "stk_sep";
 static constexpr const char *kKeyStalkTtl = "stk_ttl";
+static constexpr const char *kKeyBleThreatPhase = "ble_phs";
 static constexpr const char *kKeyWifiThreatEn = "wifi_en";
 static constexpr const char *kKeyWifiThreatMsk = "wifi_msk";
 static constexpr const char *kKeyWifiThreatMs = "wifi_ms";
@@ -43,6 +44,7 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.minBatteryPct = 20;     // do not scan below 20% battery
     p.dedupeWindowSecs = 60;  // re-emit a given mac+type at most once/minute
     p.threatScanMask = ValkyriePrefs::kThreatScanMaskAll;
+    p.bleThreatPhaseEnabled = true;
     p.constantBleScanMode = false;
     p.threatDetectionHapticEnabled = true;
     p.threatDetectionSoundEnabled = true;
@@ -50,8 +52,8 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;
     p.stalkEntryTtlSecs = 48UL * 3600UL;
-    // Match full wifiThreatScanMask default: run Wi‑Fi pass unless user disables master in Settings.
-    p.wifiThreatScanEnabled = true;
+    // Match full wifiThreatScanMask default: run Wi‑Fi phase unless user disables it in Settings.
+    p.wifiThreatPhaseEnabled = true;
     p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
     // Default promiscuous scan budget: match default scanWindowSecs (10 s).
     p.wifiThreatPassMs = 10000;
@@ -78,6 +80,7 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putUChar(kKeyMinBattery, def.minBatteryPct);
         prefs.putUShort(kKeyDedupe, def.dedupeWindowSecs);
         prefs.putUChar(kKeyScanMask, def.threatScanMask);
+        prefs.putBool(kKeyBleThreatPhase, def.bleThreatPhaseEnabled);
         prefs.putBool(kKeyConstScan, def.constantBleScanMode);
         prefs.putBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
         prefs.putBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
@@ -85,7 +88,7 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
         prefs.putUShort(kKeyStalkSepM, def.stalkMinSeparationM);
         prefs.putUInt(kKeyStalkTtl, def.stalkEntryTtlSecs);
-        prefs.putBool(kKeyWifiThreatEn, def.wifiThreatScanEnabled);
+        prefs.putBool(kKeyWifiThreatEn, def.wifiThreatPhaseEnabled);
         prefs.putUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask);
         prefs.putUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
         prefs.putUShort(kKeyWifiThreatDw, def.wifiThreatChannelDwellMs);
@@ -99,6 +102,7 @@ ValkyriePrefs ValkyriePrefs::load()
     out.minBatteryPct = prefs.getUChar(kKeyMinBattery, def.minBatteryPct);
     out.dedupeWindowSecs = prefs.getUShort(kKeyDedupe, def.dedupeWindowSecs);
     out.threatScanMask = static_cast<uint8_t>(prefs.getUChar(kKeyScanMask, def.threatScanMask) & ValkyriePrefs::kThreatScanMaskAll);
+    out.bleThreatPhaseEnabled = prefs.getBool(kKeyBleThreatPhase, def.bleThreatPhaseEnabled);
     out.constantBleScanMode = prefs.getBool(kKeyConstScan, def.constantBleScanMode);
     out.threatDetectionHapticEnabled = prefs.getBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
     out.threatDetectionSoundEnabled = prefs.getBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
@@ -106,7 +110,7 @@ ValkyriePrefs ValkyriePrefs::load()
     out.stalkMinDistinctPlaces = prefs.getUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
     out.stalkMinSeparationM = prefs.getUShort(kKeyStalkSepM, def.stalkMinSeparationM);
     out.stalkEntryTtlSecs = prefs.getUInt(kKeyStalkTtl, def.stalkEntryTtlSecs);
-    out.wifiThreatScanEnabled = prefs.getBool(kKeyWifiThreatEn, def.wifiThreatScanEnabled);
+    out.wifiThreatPhaseEnabled = prefs.getBool(kKeyWifiThreatEn, def.wifiThreatPhaseEnabled);
     out.wifiThreatScanMask =
         static_cast<uint8_t>(prefs.getUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask) & ValkyriePrefs::kWifiThreatScanMaskAll);
     out.wifiThreatPassMs = prefs.getUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
@@ -173,9 +177,9 @@ ValkyriePrefs ValkyriePrefs::load()
                 }
             }
         }
-        const bool needMasterOn = !out.wifiThreatScanEnabled && wantsWifiPass;
+        const bool needMasterOn = !out.wifiThreatPhaseEnabled && wantsWifiPass;
         if (needMasterOn)
-            out.wifiThreatScanEnabled = true;
+            out.wifiThreatPhaseEnabled = true;
 
         Preferences pw;
         if (pw.begin(kNvsNamespace, /*readOnly=*/false)) {
@@ -205,6 +209,7 @@ void ValkyriePrefs::save() const
     prefs.putUChar(kKeyMinBattery, minBatteryPct);
     prefs.putUShort(kKeyDedupe, dedupeWindowSecs);
     prefs.putUChar(kKeyScanMask, static_cast<uint8_t>(threatScanMask & ValkyriePrefs::kThreatScanMaskAll));
+    prefs.putBool(kKeyBleThreatPhase, bleThreatPhaseEnabled);
     prefs.putBool(kKeyConstScan, constantBleScanMode);
     prefs.putBool(kKeyThreatHaptic, threatDetectionHapticEnabled);
     prefs.putBool(kKeyThreatSound, threatDetectionSoundEnabled);
@@ -212,7 +217,7 @@ void ValkyriePrefs::save() const
     prefs.putUChar(kKeyStalkPlaces, stalkMinDistinctPlaces);
     prefs.putUShort(kKeyStalkSepM, stalkMinSeparationM);
     prefs.putUInt(kKeyStalkTtl, stalkEntryTtlSecs);
-    prefs.putBool(kKeyWifiThreatEn, wifiThreatScanEnabled);
+    prefs.putBool(kKeyWifiThreatEn, wifiThreatPhaseEnabled);
     prefs.putUChar(kKeyWifiThreatMsk, static_cast<uint8_t>(wifiThreatScanMask & ValkyriePrefs::kWifiThreatScanMaskAll));
     prefs.putUShort(kKeyWifiThreatMs, wifiThreatPassMs);
     prefs.putUShort(kKeyWifiThreatDw, wifiThreatChannelDwellMs);
@@ -235,6 +240,7 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.minBatteryPct = 20;
     p.dedupeWindowSecs = 60;
     p.threatScanMask = ValkyriePrefs::kThreatScanMaskAll;
+    p.bleThreatPhaseEnabled = true;
     p.constantBleScanMode = false;
     p.threatDetectionHapticEnabled = true;
     p.threatDetectionSoundEnabled = true;
@@ -242,7 +248,7 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;
     p.stalkEntryTtlSecs = 48UL * 3600UL;
-    p.wifiThreatScanEnabled = false;
+    p.wifiThreatPhaseEnabled = false;
     p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
     // Same default as ESP32 path (mirrors 10 s scan window when enabled).
     p.wifiThreatPassMs = 10000;

@@ -30,10 +30,12 @@ namespace valkyrie
 // Lifecycle (driven by runOnce()):
 //
 //   Idle      -> Scanning   after idle gap from ble_scan_schedule (0 when
-//                            constantBleScanMode), else max(0, scanIntervalSecs
+//                            constantBleScanMode && bleThreatPhaseEnabled), else max(0, scanIntervalSecs
 //                            - scanWindowSecs) from end of last *threat pass*
 //                            (BLE window + Wi‑Fi promiscuous phase); PowerFSM in {ON, DARK},
-//                            battery OK, NimBLE initialised
+//                            battery OK. BLE path requires NimBLE initialised.
+//   Wi‑Fi‑only When bleThreatPhaseEnabled is false and prefs allow Wi‑Fi work, idle gap then
+//               async Wi‑Fi pass only (no NimBLE window); hubBleWindowEndMs anchored for sprite timeline.
 //   Scanning  -> Idle       after BLE window completes, Wi‑Fi threat pass runs,
 //                            then lastScanWindowEndMs updates (wardriving-style pass)
 //   any       -> Disabled   on notifyDeepSleep / notifyLightSleep

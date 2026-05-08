@@ -21,8 +21,6 @@ void showRootMenu()
         OptThreatLog,
         OptIgnoredDevices,
         OptThreats,
-        OptBluetooth,
-        OptWiFiTgl,
         OptSettings,
         EnumEnd
     };
@@ -36,12 +34,6 @@ void showRootMenu()
     enums[n++] = OptIgnoredDevices;
     labels[n] = "Threats";
     enums[n++] = OptThreats;
-    labels[n] = "Bluetooth";
-    enums[n++] = OptBluetooth;
-#if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    labels[n] = "WiFi";
-    enums[n++] = OptWiFiTgl;
-#endif
     labels[n] = "Settings";
     enums[n++] = OptSettings;
 
@@ -62,14 +54,6 @@ void showRootMenu()
         } else if (selected == OptThreats) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieThreatsMenu;
             screen->runNow();
-        } else if (selected == OptBluetooth) {
-            graphics::menuHandler::menuQueue = graphics::menuHandler::BluetoothToggleMenu;
-            screen->runNow();
-#if HAS_WIFI && !defined(ARCH_PORTDUINO)
-        } else if (selected == OptWiFiTgl) {
-            graphics::menuHandler::menuQueue = graphics::menuHandler::WifiToggleMenu;
-            screen->runNow();
-#endif
         } else if (selected == OptSettings) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieSettingsMenu;
             screen->runNow();

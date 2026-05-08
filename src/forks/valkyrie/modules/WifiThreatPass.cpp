@@ -299,7 +299,7 @@ bool beginWifiThreatPass(BleThreatDetectorModule *mod)
     }
     const bool flockEn = prefs.isThreatTypeEnabled(ThreatType::Flock);
 
-    if (!prefs.wifiThreatScanEnabled)
+    if (!prefs.wifiThreatPhaseEnabled)
         return false;
     if (!wantAnyWifi && !flockEn)
         return false;
