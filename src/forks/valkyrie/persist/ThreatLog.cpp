@@ -111,7 +111,7 @@ static bool normalizeMacForDisplay(const char *macIn, char *out, size_t outLen)
 
 static ThreatType wireTokenToThreatType(const char *tok)
 {
-    for (unsigned u = 1; u <= 6; ++u) {
+    for (unsigned u = 1; u <= 11; ++u) {
         ThreatType t = static_cast<ThreatType>((uint8_t)u);
         if (strcmp(tok, threatTypeWireName(t)) == 0)
             return t;

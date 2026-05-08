@@ -2,7 +2,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
-#include "WifiThreatPlaceholder.h"
+#include "WifiThreatPass.h"
 #include "../HeartbeatRssiFilter.h"
 #include "AirtagStalkingState.h"
 #include "BleScanSchedule.h"
@@ -53,6 +53,16 @@ valkyrie_ThreatType toWireType(ThreatType t)
         return valkyrie_ThreatType_THREAT_TYPE_SMART_GLASSES;
     case ThreatType::Drone:
         return valkyrie_ThreatType_THREAT_TYPE_DRONE;
+    case ThreatType::WifiDeauth:
+        return valkyrie_ThreatType_THREAT_TYPE_WIFI_DEAUTH;
+    case ThreatType::WifiEapol:
+        return valkyrie_ThreatType_THREAT_TYPE_WIFI_EAPOL;
+    case ThreatType::WifiPwnagotchi:
+        return valkyrie_ThreatType_THREAT_TYPE_WIFI_PWNAGOTCHI;
+    case ThreatType::WifiSuspiciousAp:
+        return valkyrie_ThreatType_THREAT_TYPE_WIFI_SUSPICIOUS_AP;
+    case ThreatType::WifiMultiSsid:
+        return valkyrie_ThreatType_THREAT_TYPE_WIFI_MULTI_SSID;
     case ThreatType::None:
     default:
         return valkyrie_ThreatType_THREAT_TYPE_NONE;
@@ -244,16 +254,17 @@ void BleThreatDetectorModule::haltBleScan()
         scan->stop();
         scan->clearResults();
         scanActive = false;
+        hubBleWindowEndMs = millis();
         LOG_DEBUG("Valkyrie: BLE scan halted");
     }
 }
 
 void BleThreatDetectorModule::finalizeDutyThreatPass()
 {
-    // Wi-Fi placeholder: LOG only here. Do not append stub text to passNotificationBuffer — that caused a
-    // ClientNotification every pass ("WiFi: (stub)") even with zero BLE threats. Real Wi-Fi results can append later.
     if (!heartbeatActive) {
-        runWifiThreatPlaceholderPass();
+        wifiThreatPassActive = true;
+        runWifiThreatPass(this);
+        wifiThreatPassActive = false;
     }
     flushPassNotification(false);
     passNotificationBatchOpen = false;
@@ -544,6 +555,31 @@ int32_t BleThreatDetectorModule::runOnce()
 // ----------------------------------------------------------------------------
 // Detection path: classify -> dedupe -> persist + phone emit
 // ----------------------------------------------------------------------------
+
+void BleThreatDetectorModule::emitWifiThreat(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
+                                             int32_t rssi)
+{
+    if (cls.type == ThreatType::None)
+        return;
+
+    if (cls.type == ThreatType::Flock) {
+        if (!prefs.isThreatTypeEnabled(ThreatType::Flock))
+            return;
+    } else if (static_cast<uint8_t>(cls.type) >= 7 && static_cast<uint8_t>(cls.type) <= 11) {
+        if (!prefs.isWifiThreatTypeEnabled(cls.type))
+            return;
+    } else {
+        return;
+    }
+
+    if (ThreatIgnoreList::isIgnored(cls.type, mac))
+        return;
+
+    if (!tryAdmitDetection(mac, cls.type))
+        return;
+
+    emitDetection(cls, mac, name ? name : "", rssi);
+}
 
 bool BleThreatDetectorModule::tryAdmitDetection(const uint8_t mac[6], ThreatType type)
 {

@@ -624,6 +624,11 @@ class Screen : public concurrency::OSThread
     /// Used to force (super slow) eink displays to draw critical frames
     void forceDisplay(bool forceUiUpdate = false);
 
+#if defined(VALKYRIE_FORK)
+    /// Pump one UI frame immediately while the cooperative main thread is blocked (e.g. Wi‑Fi threat pass).
+    void repaintFrameNow();
+#endif
+
     /// Draws our SSL cert screen during boot (called from WebServer)
     void setSSLFrames();
 

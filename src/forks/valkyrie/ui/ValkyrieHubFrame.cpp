@@ -12,7 +12,9 @@
 #include "graphics/SharedUIDisplay.h"
 #include "sprites/idle_rgb565.h"
 #include "sprites/scan_ble_loop_rgb565.h"
+#include "sprites/scan_wifi_loop_rgb565.h"
 #include "sprites/start_ble_scan_rgb565.h"
+#include "sprites/start_wifi_scan_rgb565.h"
 #include "sprites/start_sleep_loop_rgb565.h"
 #include "sprites/start_sleep_rgb565.h"
 
@@ -48,6 +50,22 @@ static const uint16_t *const kScanBleLoopFrames[kLoopFrameCount] = {
     scanBleLoop1_rgb565,
     scanBleLoop2_rgb565,
     scanBleLoop3_rgb565,
+};
+
+/// Wi‑Fi intro strip: idle pose plus five `startWifiScan*` cels (same timing as BLE scan intro).
+static const uint16_t *const kStartWifiScanFrames[kBleStartFrameCount] = {
+    kHubIdlePose,
+    startWifiScan1_rgb565,
+    startWifiScan2_rgb565,
+    startWifiScan3_rgb565,
+    startWifiScan4_rgb565,
+    startWifiScan5_rgb565,
+};
+
+static const uint16_t *const kScanWifiLoopFrames[kLoopFrameCount] = {
+    scanWifiLoop1_rgb565,
+    scanWifiLoop2_rgb565,
+    scanWifiLoop3_rgb565,
 };
 
 constexpr unsigned kSleepStartFrameCount = 6;
@@ -132,19 +150,74 @@ const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
         return kScanBleLoopFrames[fi];
     }
 
-    const uint32_t lastEnd = det->getLastScanWindowEndMs();
-    if (lastEnd == 0)
+    // Wi‑Fi promiscuous phase: BLE “start scan” reverse (end of BLE arc), then Wi‑Fi intro forward + Wi‑Fi loop.
+    if (det->isWifiThreatPassActive()) {
+        const uint32_t bleEnd = det->getHubBleWindowEndMs();
+        const uint32_t tw = bleEnd ? (now - bleEnd) : 0;
+        if (tw < kOutroTotalMs) {
+            unsigned seg = (unsigned)(tw / kFrameMsIntro);
+            if (seg >= kBleStartFrameCount)
+                seg = kBleStartFrameCount - 1;
+            const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
+            return kStartBleScanFrames[revIdx];
+        }
+        const uint32_t tAfterBleOutro = tw - kOutroTotalMs;
+        if (tAfterBleOutro < kIntroTotalMs) {
+            unsigned fi = (unsigned)(tAfterBleOutro / kFrameMsIntro);
+            if (fi >= kBleStartFrameCount)
+                fi = kBleStartFrameCount - 1;
+            return kStartWifiScanFrames[fi];
+        }
+        const uint32_t tLoop = tAfterBleOutro - kIntroTotalMs;
+        const uint32_t loopPeriod = kLoopFrameCount * kFrameMsLoop;
+        unsigned fi = (unsigned)((tLoop % loopPeriod) / kFrameMsLoop);
+        if (fi >= kLoopFrameCount)
+            fi = kLoopFrameCount - 1;
+        return kScanWifiLoopFrames[fi];
+    }
+
+    const uint32_t passEnd = det->getLastScanWindowEndMs();
+    if (passEnd == 0)
         return kHubIdlePose;
 
-    const uint32_t te = now - lastEnd;
+    const uint32_t te = now - passEnd;
+    const uint32_t bleEnd = det->getHubBleWindowEndMs();
+    const uint32_t passWifiSpan = (passEnd > bleEnd) ? (passEnd - bleEnd) : 0;
+    constexpr uint32_t kWifiPhaseSkipThresholdMs = 80;
+    const bool wifiPhaseRanLong = passWifiSpan > kWifiPhaseSkipThresholdMs;
+
+    if (!wifiPhaseRanLong) {
+        // Wi‑Fi skipped or negligible: original timeline — BLE outro → sleep intro → sleep loop from full-pass end.
+        if (te < kOutroTotalMs) {
+            unsigned seg = (unsigned)(te / kFrameMsIntro);
+            if (seg >= kBleStartFrameCount)
+                seg = kBleStartFrameCount - 1;
+            const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
+            return kStartBleScanFrames[revIdx];
+        }
+        const uint32_t tSleep = te - kOutroTotalMs;
+        if (tSleep < kSleepIntroTotalMs) {
+            unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);
+            if (fi >= kSleepStartFrameCount)
+                fi = kSleepStartFrameCount - 1;
+            return kStartSleepFrames[fi];
+        }
+        const uint32_t tLoop = tSleep - kSleepIntroTotalMs;
+        const uint32_t sleepLoopPeriod = kSleepLoopFrameCount * kFrameMsSleepLoop;
+        unsigned fi = (unsigned)((tLoop % sleepLoopPeriod) / kFrameMsSleepLoop);
+        if (fi >= kSleepLoopFrameCount)
+            fi = kSleepLoopFrameCount - 1;
+        return kStartSleepLoopFrames[fi];
+    }
+
+    // Wi‑Fi ran: reverse Wi‑Fi “start scan” wind-down, then sleep intro + loop (BLE / Wi‑Fi phase outros not replayed from pass end).
     if (te < kOutroTotalMs) {
         unsigned seg = (unsigned)(te / kFrameMsIntro);
         if (seg >= kBleStartFrameCount)
             seg = kBleStartFrameCount - 1;
         const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
-        return kStartBleScanFrames[revIdx];
+        return kStartWifiScanFrames[revIdx];
     }
-
     const uint32_t tSleep = te - kOutroTotalMs;
     if (tSleep < kSleepIntroTotalMs) {
         unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);
@@ -152,7 +225,6 @@ const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
             fi = kSleepStartFrameCount - 1;
         return kStartSleepFrames[fi];
     }
-
     const uint32_t tLoop = tSleep - kSleepIntroTotalMs;
     const uint32_t sleepLoopPeriod = kSleepLoopFrameCount * kFrameMsSleepLoop;
     unsigned fi = (unsigned)((tLoop % sleepLoopPeriod) / kFrameMsSleepLoop);
@@ -191,7 +263,19 @@ void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, in
     snprintf(line2, sizeof(line2), "Threats: %u", threatLines);
 
     if (bleThreatDetector) {
-        snprintf(line3, sizeof(line3), "Status: %s", bleThreatDetector->isScanActive() ? "Scanning" : "Sleeping");
+        const char *status;
+        if (bleThreatDetector->isScanActive()) {
+            status = "Scanning BLE";
+        } else if (bleThreatDetector->isWifiThreatPassActive()) {
+            status = "Scanning WiFi";
+        } else if (!prefs.wifiThreatScanEnabled) {
+            status = "WiFi scan off";
+        } else if (!prefs.isWifiThreatPassConfigured()) {
+            status = "WiFi types off";
+        } else {
+            status = "Sleeping";
+        }
+        snprintf(line3, sizeof(line3), "Status: %s", status);
     } else if (!prefs.bleThreatDetectorEnabled) {
         snprintf(line3, sizeof(line3), "Turn on in Settings");
     } else {

@@ -13,7 +13,7 @@ namespace valkyrie
 struct ValkyriePrefs {
     bool bleThreatDetectorEnabled;
     uint16_t scanIntervalSecs; // target seconds between *starts* of consecutive threat passes (idle gap =
-                               // max(0, scanIntervalSecs - scanWindowSecs); pass = BLE window + Wi-Fi placeholder)
+                               // max(0, scanIntervalSecs - scanWindowSecs); pass = BLE window + Wi‑Fi threat pass)
     uint16_t scanWindowSecs;   // duration of each passive scan window
     uint8_t minBatteryPct;     // skip scans below this battery level
     uint16_t dedupeWindowSecs; // mac+type re-emit throttle
@@ -21,6 +21,14 @@ struct ValkyriePrefs {
     // Bits 0..5 enable scanning for ThreatType::Airtag..Drone (bit = 1 => on).
     static constexpr uint8_t kThreatScanMaskAll = 0x3F;
     uint8_t threatScanMask;
+
+    // Wi‑Fi promiscuous phase (end of each duty pass). Master switch default off — disrupts STA briefly.
+    bool wifiThreatScanEnabled;
+    /// Bits 0..4 enable ThreatType::WifiDeauth..WifiMultiSsid (7..11).
+    static constexpr uint8_t kWifiThreatScanMaskAll = 0x1F;
+    uint8_t wifiThreatScanMask;
+    uint16_t wifiThreatPassMs;         // total time budget per pass
+    uint16_t wifiThreatChannelDwellMs; // dwell per channel hop (1/6/11)
 
     // When true, no idle gap between BLE scan windows (higher power use). NVS key const_scn.
     bool constantBleScanMode;
@@ -49,6 +57,12 @@ struct ValkyriePrefs {
 
     bool isThreatTypeEnabled(ThreatType t) const;
     void setThreatTypeEnabled(ThreatType t, bool on);
+
+    bool isWifiThreatTypeEnabled(ThreatType t) const;
+    void setWifiThreatTypeEnabled(ThreatType t, bool on);
+
+    /** True when runWifiThreatPass would proceed past early prefs checks (WifiThreatPass.cpp). */
+    bool isWifiThreatPassConfigured() const;
 };
 
 // ----------------------------------------------------------------------------
@@ -71,6 +85,39 @@ inline void ValkyriePrefs::setThreatTypeEnabled(ThreatType t, bool on)
         threatScanMask |= bit;
     else
         threatScanMask = static_cast<uint8_t>(threatScanMask & static_cast<uint8_t>(~bit));
+}
+
+inline bool ValkyriePrefs::isWifiThreatTypeEnabled(ThreatType t) const
+{
+    uint8_t v = static_cast<uint8_t>(t);
+    if (v < 7 || v > 11)
+        return false;
+    return (wifiThreatScanMask & static_cast<uint8_t>(1u << (v - 7))) != 0;
+}
+
+inline void ValkyriePrefs::setWifiThreatTypeEnabled(ThreatType t, bool on)
+{
+    uint8_t v = static_cast<uint8_t>(t);
+    if (v < 7 || v > 11)
+        return;
+    uint8_t bit = static_cast<uint8_t>(1u << (v - 7));
+    if (on)
+        wifiThreatScanMask |= bit;
+    else
+        wifiThreatScanMask = static_cast<uint8_t>(wifiThreatScanMask & static_cast<uint8_t>(~bit));
+}
+
+inline bool ValkyriePrefs::isWifiThreatPassConfigured() const
+{
+    if (!wifiThreatScanEnabled)
+        return false;
+    if (isThreatTypeEnabled(ThreatType::Flock))
+        return true;
+    for (unsigned u = 7; u <= 11; ++u) {
+        if (isWifiThreatTypeEnabled(static_cast<ThreatType>((uint8_t)u)))
+            return true;
+    }
+    return false;
 }
 
 } // namespace valkyrie

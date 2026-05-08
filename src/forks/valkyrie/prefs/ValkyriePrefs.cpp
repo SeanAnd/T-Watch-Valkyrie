@@ -24,6 +24,12 @@ static constexpr const char *kKeyStalkSight = "stk_sig";
 static constexpr const char *kKeyStalkPlaces = "stk_plc";
 static constexpr const char *kKeyStalkSepM = "stk_sep";
 static constexpr const char *kKeyStalkTtl = "stk_ttl";
+static constexpr const char *kKeyWifiThreatEn = "wifi_en";
+static constexpr const char *kKeyWifiThreatMsk = "wifi_msk";
+static constexpr const char *kKeyWifiThreatMs = "wifi_ms";
+static constexpr const char *kKeyWifiThreatDw = "wifi_dw";
+/// One-shot NVS upgrade marker: sync legacy installs where wifi_msk had types on but wifi_en stayed false.
+static constexpr const char *kKeyWifiMig = "wifi_mig1";
 
 ValkyriePrefs ValkyriePrefs::defaults()
 {
@@ -44,6 +50,11 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;
     p.stalkEntryTtlSecs = 48UL * 3600UL;
+    // Match full wifiThreatScanMask default: run Wi‑Fi pass unless user disables master in Settings.
+    p.wifiThreatScanEnabled = true;
+    p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
+    p.wifiThreatPassMs = 3500;
+    p.wifiThreatChannelDwellMs = 350;
     return p;
 }
 
@@ -73,6 +84,10 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
         prefs.putUShort(kKeyStalkSepM, def.stalkMinSeparationM);
         prefs.putUInt(kKeyStalkTtl, def.stalkEntryTtlSecs);
+        prefs.putBool(kKeyWifiThreatEn, def.wifiThreatScanEnabled);
+        prefs.putUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask);
+        prefs.putUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
+        prefs.putUShort(kKeyWifiThreatDw, def.wifiThreatChannelDwellMs);
         prefs.putBool(kKeySeeded, true);
     }
 
@@ -90,6 +105,16 @@ ValkyriePrefs ValkyriePrefs::load()
     out.stalkMinDistinctPlaces = prefs.getUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
     out.stalkMinSeparationM = prefs.getUShort(kKeyStalkSepM, def.stalkMinSeparationM);
     out.stalkEntryTtlSecs = prefs.getUInt(kKeyStalkTtl, def.stalkEntryTtlSecs);
+    out.wifiThreatScanEnabled = prefs.getBool(kKeyWifiThreatEn, def.wifiThreatScanEnabled);
+    out.wifiThreatScanMask =
+        static_cast<uint8_t>(prefs.getUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask) & ValkyriePrefs::kWifiThreatScanMaskAll);
+    out.wifiThreatPassMs = prefs.getUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
+    out.wifiThreatChannelDwellMs = prefs.getUShort(kKeyWifiThreatDw, def.wifiThreatChannelDwellMs);
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+    const uint8_t wifiMigLegacy = prefs.getUChar(kKeyWifiMig, 0);
+#else
+    const uint8_t wifiMigLegacy = 1;
+#endif
     prefs.end();
 
     // Sanity-clamp: a zero-window or zero-interval would cause us to
@@ -122,6 +147,47 @@ ValkyriePrefs ValkyriePrefs::load()
     if (out.stalkEntryTtlSecs > 7UL * 24UL * 3600UL)
         out.stalkEntryTtlSecs = 7UL * 24UL * 3600UL;
 
+    if (out.wifiThreatPassMs < 500)
+        out.wifiThreatPassMs = 500;
+    if (out.wifiThreatPassMs > 15000)
+        out.wifiThreatPassMs = 15000;
+    if (out.wifiThreatChannelDwellMs < 50)
+        out.wifiThreatChannelDwellMs = 50;
+    if (out.wifiThreatChannelDwellMs > 600)
+        out.wifiThreatChannelDwellMs = 600;
+    if ((out.wifiThreatScanMask & ValkyriePrefs::kWifiThreatScanMaskAll) == 0)
+        out.wifiThreatScanMask = def.wifiThreatScanMask;
+
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+    // Legacy contradiction: threat toggles (wifi_msk / Flock) implied Wi‑Fi work while wifi_en stayed false from older seeds.
+    if (wifiMigLegacy == 0) {
+        bool wantsWifiPass = false;
+        if (out.isThreatTypeEnabled(ThreatType::Flock))
+            wantsWifiPass = true;
+        else {
+            for (unsigned u = 7; u <= 11; ++u) {
+                if (out.isWifiThreatTypeEnabled(static_cast<ThreatType>((uint8_t)u))) {
+                    wantsWifiPass = true;
+                    break;
+                }
+            }
+        }
+        const bool needMasterOn = !out.wifiThreatScanEnabled && wantsWifiPass;
+        if (needMasterOn)
+            out.wifiThreatScanEnabled = true;
+
+        Preferences pw;
+        if (pw.begin(kNvsNamespace, /*readOnly=*/false)) {
+            if (needMasterOn)
+                pw.putBool(kKeyWifiThreatEn, true);
+            pw.putUChar(kKeyWifiMig, 1);
+            pw.end();
+        }
+        if (needMasterOn)
+            LOG_INFO("ValkyriePrefs: synced wifi_en on (Wi‑Fi/Flock toggles were enabled; master was off)");
+    }
+#endif
+
     return out;
 }
 
@@ -145,6 +211,10 @@ void ValkyriePrefs::save() const
     prefs.putUChar(kKeyStalkPlaces, stalkMinDistinctPlaces);
     prefs.putUShort(kKeyStalkSepM, stalkMinSeparationM);
     prefs.putUInt(kKeyStalkTtl, stalkEntryTtlSecs);
+    prefs.putBool(kKeyWifiThreatEn, wifiThreatScanEnabled);
+    prefs.putUChar(kKeyWifiThreatMsk, static_cast<uint8_t>(wifiThreatScanMask & ValkyriePrefs::kWifiThreatScanMaskAll));
+    prefs.putUShort(kKeyWifiThreatMs, wifiThreatPassMs);
+    prefs.putUShort(kKeyWifiThreatDw, wifiThreatChannelDwellMs);
     prefs.putBool(kKeySeeded, true);
     prefs.end();
 }
@@ -171,6 +241,10 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;
     p.stalkEntryTtlSecs = 48UL * 3600UL;
+    p.wifiThreatScanEnabled = false;
+    p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
+    p.wifiThreatPassMs = 3500;
+    p.wifiThreatChannelDwellMs = 350;
     return p;
 }
 ValkyriePrefs ValkyriePrefs::load() { return defaults(); }

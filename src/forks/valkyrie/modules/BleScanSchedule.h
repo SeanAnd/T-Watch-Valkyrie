@@ -9,7 +9,7 @@ namespace valkyrie
 namespace ble_scan_schedule
 {
 
-/// Milliseconds to wait after a threat pass completes (BLE scan window + Wi-Fi placeholder phase);
+/// Milliseconds to wait after a threat pass completes (BLE scan window + Wi‑Fi threat phase);
 /// 0 when constant scan mode chains windows back-to-back (Wi-Fi stub still runs between windows).
 inline uint32_t idleGapMsAfterWindow(const ValkyriePrefs &p)
 {

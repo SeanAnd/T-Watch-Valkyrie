@@ -88,4 +88,10 @@ extern bool hasBeenSetup;
 
 void assertIsSetup();
 
+/**
+ * Run any mainController threads that are due now, except `skip` (typically the caller's OSThread).
+ * Used to avoid multi-second stalls when one thread performs synchronous work (e.g. Wi‑Fi promisc pass).
+ */
+void serviceMainThreadsExcept(const Thread *skip);
+
 } // namespace concurrency

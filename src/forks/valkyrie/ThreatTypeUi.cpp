@@ -18,6 +18,16 @@ const char *threatTypeWireName(ThreatType t)
         return "SMART_GLASSES";
     case ThreatType::Drone:
         return "DRONE";
+    case ThreatType::WifiDeauth:
+        return "WIFI_DEAUTH";
+    case ThreatType::WifiEapol:
+        return "WIFI_EAPOL";
+    case ThreatType::WifiPwnagotchi:
+        return "WIFI_PWNAGOTCHI";
+    case ThreatType::WifiSuspiciousAp:
+        return "WIFI_SUSPICIOUS_AP";
+    case ThreatType::WifiMultiSsid:
+        return "WIFI_MULTI_SSID";
     case ThreatType::None:
     default:
         return "NONE";
@@ -39,6 +49,16 @@ const char *threatTypeMenuLabel(ThreatType t)
         return "Glasses";
     case ThreatType::Drone:
         return "Drone";
+    case ThreatType::WifiDeauth:
+        return "WiFi deauth";
+    case ThreatType::WifiEapol:
+        return "WiFi EAPOL";
+    case ThreatType::WifiPwnagotchi:
+        return "Pwnagotchi";
+    case ThreatType::WifiSuspiciousAp:
+        return "Suspicious AP";
+    case ThreatType::WifiMultiSsid:
+        return "Multi-SSID";
     case ThreatType::None:
     default:
         return "?";

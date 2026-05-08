@@ -2054,6 +2054,16 @@ bool Screen::isOverlayBannerShowing()
 }
 
 #if defined(VALKYRIE_FORK)
+void Screen::repaintFrameNow()
+{
+    if (!useDisplay || !ui)
+        return;
+#if GRAPHICS_TFT_COLORING_ENABLED
+    prepareFrameColorRegions();
+#endif
+    ui->update();
+}
+
 void Screen::queueSwitchToValkyrieHubFrame()
 {
     enqueueCmd(ScreenCmd{.cmd = Cmd::SWITCH_TO_VALKYRIE_HUB});

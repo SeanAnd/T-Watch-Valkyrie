@@ -28,7 +28,12 @@ typedef enum _valkyrie_ThreatType {
     /* Meta Ray-Ban / Quest (manuf 0x01AB, service 0xFD5F) */
     valkyrie_ThreatType_THREAT_TYPE_SMART_GLASSES = 5,
     /* ASTM F3411 RemoteID broadcast (service 0xFFFA) */
-    valkyrie_ThreatType_THREAT_TYPE_DRONE = 6
+    valkyrie_ThreatType_THREAT_TYPE_DRONE = 6,
+    valkyrie_ThreatType_THREAT_TYPE_WIFI_DEAUTH = 7,
+    valkyrie_ThreatType_THREAT_TYPE_WIFI_EAPOL = 8,
+    valkyrie_ThreatType_THREAT_TYPE_WIFI_PWNAGOTCHI = 9,
+    valkyrie_ThreatType_THREAT_TYPE_WIFI_SUSPICIOUS_AP = 10,
+    valkyrie_ThreatType_THREAT_TYPE_WIFI_MULTI_SSID = 11
 } valkyrie_ThreatType;
 
 /* Struct definitions */
@@ -61,8 +66,8 @@ extern "C" {
 
 /* Helper constants for enums */
 #define _valkyrie_ThreatType_MIN valkyrie_ThreatType_THREAT_TYPE_NONE
-#define _valkyrie_ThreatType_MAX valkyrie_ThreatType_THREAT_TYPE_DRONE
-#define _valkyrie_ThreatType_ARRAYSIZE ((valkyrie_ThreatType)(valkyrie_ThreatType_THREAT_TYPE_DRONE+1))
+#define _valkyrie_ThreatType_MAX valkyrie_ThreatType_THREAT_TYPE_WIFI_MULTI_SSID
+#define _valkyrie_ThreatType_ARRAYSIZE ((valkyrie_ThreatType)(valkyrie_ThreatType_THREAT_TYPE_WIFI_MULTI_SSID + 1))
 
 
 /* Initializer values for message structs */

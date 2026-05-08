@@ -32,9 +32,9 @@ namespace valkyrie
 //   Idle      -> Scanning   after idle gap from ble_scan_schedule (0 when
 //                            constantBleScanMode), else max(0, scanIntervalSecs
 //                            - scanWindowSecs) from end of last *threat pass*
-//                            (BLE window + Wi-Fi placeholder); PowerFSM in {ON, DARK},
+//                            (BLE window + Wi‑Fi promiscuous phase); PowerFSM in {ON, DARK},
 //                            battery OK, NimBLE initialised
-//   Scanning  -> Idle       after BLE window completes, Wi-Fi placeholder runs,
+//   Scanning  -> Idle       after BLE window completes, Wi‑Fi threat pass runs,
 //                            then lastScanWindowEndMs updates (wardriving-style pass)
 //   any       -> Disabled   on notifyDeepSleep / notifyLightSleep
 //   Disabled  -> Idle       once we run again post-wake
@@ -48,19 +48,28 @@ namespace valkyrie
 class BleThreatDetectorModule : private concurrency::OSThread
 {
   public:
+    /** For cooperative yield during long synchronous work (private OSThread base). */
+    Thread *threadForSchedulerSkip() { return static_cast<concurrency::OSThread *>(this); }
+
     explicit BleThreatDetectorModule(const ValkyriePrefs &prefs);
     ~BleThreatDetectorModule();
 
     uint32_t getTotalDetections() const { return totalDetections; }
     bool isScanActive() const { return scanActive; }
+    bool isWifiThreatPassActive() const { return wifiThreatPassActive; }
     uint32_t getScanStartedMs() const { return scanStartedMs; }
     uint32_t getLastScanWindowEndMs() const { return lastScanWindowEndMs; }
+    /** Millis when the NimBLE scan window stopped (hub sprite: BLE outro anchor before/during Wi‑Fi phase). */
+    uint32_t getHubBleWindowEndMs() const { return hubBleWindowEndMs; }
 
     /** Reload prefs from NVS (call after changing threat-type or scan prefs in UI). */
     void reloadPrefs();
 
     /** Reload ignore list from NVS (call after UI add/remove). */
     void reloadIgnoreList();
+
+    /** Wi‑Fi promiscuous phase: emit after classifying an 802.11 frame (respects prefs + ignore list + dedupe). */
+    void emitWifiThreat(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi);
 
     /** Proximity “heartbeat” listen mode for one MAC: continuous passive scan, duplicates on, no logging/phone. */
     bool startHeartbeat(const uint8_t mac[6], ThreatType type);
@@ -82,9 +91,9 @@ class BleThreatDetectorModule : private concurrency::OSThread
     void startScanWindow();
     /// Stop NimBLE scan hardware if active; does not update hub timing or run Wi-Fi phase.
     void haltBleScan();
-    /// End of duty-cycle BLE phase: optional Wi-Fi placeholder (passive duty only), then lastScanWindowEndMs.
+    /// End of duty-cycle BLE phase: Wi‑Fi promiscuous pass when enabled (passive duty only), then lastScanWindowEndMs.
     void finalizeDutyThreatPass();
-    /// Fast teardown before LS/deep sleep or when handing off to heartbeat: no Wi-Fi placeholder.
+    /// Fast teardown before LS/deep sleep or when handing off to heartbeat: no Wi‑Fi pass.
     void abortBleScanForSleep();
 
     // Friends needed because the NimBLE callback shim (a private class
@@ -139,6 +148,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     /// Set when a scan window ends (NimBLE stop or forced stop). Zero means
     /// no window has completed yet this session — no inter-window gap then.
     uint32_t lastScanWindowEndMs = 0;
+    /// When the BLE phase stopped (`haltBleScan`); hub uses this so Wi‑Fi promiscuous time does not reuse the sleep timeline.
+    uint32_t hubBleWindowEndMs = 0;
+    /// True while synchronous Wi‑Fi promiscuous threat pass runs (hub status).
+    volatile bool wifiThreatPassActive = false;
 
     // For diagnostics / future UI.
     uint32_t totalDetections = 0;

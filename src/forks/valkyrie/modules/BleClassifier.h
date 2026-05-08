@@ -21,6 +21,12 @@ enum class ThreatType : uint8_t {
     Flock = 4,
     SmartGlasses = 5,
     Drone = 6,
+    // Wi‑Fi promiscuous phase (gated by wifiThreatScanEnabled + wifiThreatScanMask; Flock uses BLE mask).
+    WifiDeauth = 7,
+    WifiEapol = 8,
+    WifiPwnagotchi = 9,
+    WifiSuspiciousAp = 10,
+    WifiMultiSsid = 11,
 };
 
 // Result of classifying a single BLE advertisement.

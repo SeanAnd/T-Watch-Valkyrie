@@ -26,6 +26,19 @@ void OSThread::setup()
     timerController.ThreadName = "timerController";
 }
 
+void serviceMainThreadsExcept(const Thread *skip)
+{
+    const unsigned long time = millis();
+    const int sz = mainController.size(true);
+    for (int i = 0; i < sz; i++) {
+        Thread *t = mainController.get(i);
+        if (!t || t == skip)
+            continue;
+        if (t->tillRun(time) <= 0)
+            t->run();
+    }
+}
+
 OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_controller)
     : Thread(NULL, period), controller(_controller)
 {

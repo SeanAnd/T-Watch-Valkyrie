@@ -30,7 +30,7 @@ static size_t s_count = 0;
 
 static bool validType(uint8_t v)
 {
-    return v >= 1 && v <= 6;
+    return v >= 1 && v <= 11;
 }
 
 static bool entryMatches(const Entry &e, ThreatType t, const uint8_t mac[6])

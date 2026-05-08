@@ -25,6 +25,11 @@ enum ThreatType {
     THREAT_TYPE_FLOCK = 4;         // Flock automatic licence-plate camera
     THREAT_TYPE_SMART_GLASSES = 5; // Meta Ray-Ban / Quest (manuf 0x01AB, service 0xFD5F)
     THREAT_TYPE_DRONE = 6;         // ASTM F3411 RemoteID broadcast (service 0xFFFA)
+    THREAT_TYPE_WIFI_DEAUTH = 7;
+    THREAT_TYPE_WIFI_EAPOL = 8;
+    THREAT_TYPE_WIFI_PWNAGOTCHI = 9;
+    THREAT_TYPE_WIFI_SUSPICIOUS_AP = 10;
+    THREAT_TYPE_WIFI_MULTI_SSID = 11;
 }
 
 // One detected BLE threat. The watch emits one of these per
