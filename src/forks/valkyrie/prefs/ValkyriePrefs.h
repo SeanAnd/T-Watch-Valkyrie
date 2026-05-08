@@ -12,8 +12,8 @@ namespace valkyrie
 // rebases never collide on key names or layout.
 struct ValkyriePrefs {
     bool bleThreatDetectorEnabled;
-    uint16_t scanIntervalSecs; // target seconds between *starts* of consecutive windows (idle gap =
-                               // max(0, scanIntervalSecs - scanWindowSecs); see BleThreatDetectorModule)
+    uint16_t scanIntervalSecs; // target seconds between *starts* of consecutive threat passes (idle gap =
+                               // max(0, scanIntervalSecs - scanWindowSecs); pass = BLE window + Wi-Fi placeholder)
     uint16_t scanWindowSecs;   // duration of each passive scan window
     uint8_t minBatteryPct;     // skip scans below this battery level
     uint16_t dedupeWindowSecs; // mac+type re-emit throttle

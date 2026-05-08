@@ -13,6 +13,7 @@
 #include "esp_sleep.h"
 
 #include <stdint.h>
+#include <string>
 
 // Forward declarations to avoid pulling NimBLE into our public header.
 class NimBLEScan;
@@ -30,16 +31,20 @@ namespace valkyrie
 //
 //   Idle      -> Scanning   after idle gap from ble_scan_schedule (0 when
 //                            constantBleScanMode), else max(0, scanIntervalSecs
-//                            - scanWindowSecs) from last window end; PowerFSM
-//                            in {ON, DARK}, battery OK, NimBLE initialised
-//   Scanning  -> Idle       after scan_window elapses (NimBLE stop)
+//                            - scanWindowSecs) from end of last *threat pass*
+//                            (BLE window + Wi-Fi placeholder); PowerFSM in {ON, DARK},
+//                            battery OK, NimBLE initialised
+//   Scanning  -> Idle       after BLE window completes, Wi-Fi placeholder runs,
+//                            then lastScanWindowEndMs updates (wardriving-style pass)
 //   any       -> Disabled   on notifyDeepSleep / notifyLightSleep
 //   Disabled  -> Idle       once we run again post-wake
 //
 // Detections flow:
 //
-//   onResult(ad) -> classifyAdvertisement(..., mac) -> dedupe -> {ThreatLog,
-//                                                         service->sendToPhone(PRIVATE_APP)}
+//   onResult(ad) -> classifyAdvertisement(..., mac) -> dedupe -> ThreatLog + LOG_INFO + (duty pass:
+//   newline batches for ClientNotification; heartbeat: immediate PRIVATE_APP + notification).
+//   Policy A: during passive duty BLE+Wi-Fi pass, suppress per-detection PRIVATE_APP to reduce spam;
+//   ThreatLog remains the structured sink. One or two ClientNotifications flush at pass end (400-char cells).
 class BleThreatDetectorModule : private concurrency::OSThread
 {
   public:
@@ -75,7 +80,12 @@ class BleThreatDetectorModule : private concurrency::OSThread
     void initScanIfNeeded();
     bool shouldScan() const;
     void startScanWindow();
-    void stopScanWindow();
+    /// Stop NimBLE scan hardware if active; does not update hub timing or run Wi-Fi phase.
+    void haltBleScan();
+    /// End of duty-cycle BLE phase: optional Wi-Fi placeholder (passive duty only), then lastScanWindowEndMs.
+    void finalizeDutyThreatPass();
+    /// Fast teardown before LS/deep sleep or when handing off to heartbeat: no Wi-Fi placeholder.
+    void abortBleScanForSleep();
 
     // Friends needed because the NimBLE callback shim (a private class
     // inside the .cpp) reaches in to call onAdvertisement().
@@ -110,6 +120,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     void emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi,
                        bool gpsStalkingTrigger = false, uint32_t gpsStalkingSightings = 0, uint32_t gpsStalkingPlaces = 0);
 
+    void appendPassThreatNotificationLine(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
+                                          int32_t rssi, const char *detailBuf);
+    void flushPassNotification(bool sleepAbort);
+
     ValkyriePrefs prefs;
     AirtagStalkingState airtagStalking;
 
@@ -143,6 +157,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     volatile bool heartbeatSmoothedValid = false;
     volatile int32_t heartbeatSmoothedRssi = -128;
     volatile uint8_t heartbeatLatchedTierU8 = 0; // HeartbeatSignalTier
+
+    /// Passive duty: newline batch for ClientNotification; policy A defers PRIVATE_APP until burst optional future.
+    std::string passNotificationBuffer;
+    bool passNotificationBatchOpen = false;
 };
 
 } // namespace valkyrie

@@ -2,6 +2,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
+#include "WifiThreatPlaceholder.h"
 #include "../HeartbeatRssiFilter.h"
 #include "AirtagStalkingState.h"
 #include "BleScanSchedule.h"
@@ -16,6 +17,7 @@
 #include "main.h" // nimbleBluetooth, powerStatus
 #include "mesh/MeshService.h"
 #include "mesh/Router.h"
+#include "mesh/generated/meshtastic/mesh.pb.h"
 #include "mesh/generated/meshtastic/portnums.pb.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
@@ -25,6 +27,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace valkyrie
 {
@@ -143,7 +146,9 @@ BleThreatDetectorModule::~BleThreatDetectorModule()
 {
     if (heartbeatActive)
         stopHeartbeat();
-    stopScanWindow();
+    passNotificationBatchOpen = false;
+    passNotificationBuffer.clear();
+    haltBleScan();
     preflightSleepObserver.unobserve(&preflightSleep);
     lightSleepObserver.unobserve(&notifyLightSleep);
     deepSleepObserver.unobserve(&notifyDeepSleep);
@@ -224,21 +229,108 @@ void BleThreatDetectorModule::startScanWindow()
         hapticEmittedThisScanWindow = false;
         soundEmittedThisScanWindow = false;
         scanStartedMs = millis();
+        passNotificationBuffer.clear();
+        passNotificationBatchOpen = true;
         LOG_DEBUG("Valkyrie: BLE scan started for %us", prefs.scanWindowSecs);
     } else {
         LOG_WARN("Valkyrie: BLE scan start failed (likely contended by GATT)");
+        passNotificationBatchOpen = false;
     }
 }
 
-void BleThreatDetectorModule::stopScanWindow()
+void BleThreatDetectorModule::haltBleScan()
 {
     if (scan && scanActive) {
         scan->stop();
         scan->clearResults();
         scanActive = false;
-        lastScanWindowEndMs = millis();
-        LOG_DEBUG("Valkyrie: BLE scan stopped");
+        LOG_DEBUG("Valkyrie: BLE scan halted");
     }
+}
+
+void BleThreatDetectorModule::finalizeDutyThreatPass()
+{
+    // Wi-Fi placeholder: LOG only here. Do not append stub text to passNotificationBuffer — that caused a
+    // ClientNotification every pass ("WiFi: (stub)") even with zero BLE threats. Real Wi-Fi results can append later.
+    if (!heartbeatActive) {
+        runWifiThreatPlaceholderPass();
+    }
+    flushPassNotification(false);
+    passNotificationBatchOpen = false;
+    lastScanWindowEndMs = millis();
+}
+
+void BleThreatDetectorModule::abortBleScanForSleep()
+{
+    haltBleScan();
+    flushPassNotification(true);
+    passNotificationBatchOpen = false;
+    lastScanWindowEndMs = millis();
+}
+
+void BleThreatDetectorModule::appendPassThreatNotificationLine(const ClassificationResult &cls, const uint8_t mac[6],
+                                                               const char *name, int32_t rssi, const char *detailBuf)
+{
+    char line[224];
+    if (name && name[0])
+        snprintf(line, sizeof(line), "%s %02X:%02X:%02X:%02X:%02X:%02X %d dBm \"%s\"", threatTypeWireName(cls.type),
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi, name);
+    else
+        snprintf(line, sizeof(line), "%s %02X:%02X:%02X:%02X:%02X:%02X %d dBm", threatTypeWireName(cls.type), mac[0],
+                 mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi);
+    if (detailBuf && detailBuf[0]) {
+        const size_t n = strlen(line);
+        snprintf(line + n, sizeof(line) - n, " %s", detailBuf);
+        line[sizeof(line) - 1] = '\0';
+    }
+    if (!passNotificationBuffer.empty())
+        passNotificationBuffer += '\n';
+    passNotificationBuffer += line;
+}
+
+void BleThreatDetectorModule::flushPassNotification(bool sleepAbort)
+{
+    if (!router || !service) {
+        passNotificationBuffer.clear();
+        return;
+    }
+
+    if (sleepAbort && passNotificationBuffer.empty()) {
+        return;
+    }
+
+    if (sleepAbort) {
+        passNotificationBuffer += '\n';
+        passNotificationBuffer += "Valkyrie: pass aborted (sleep)";
+    }
+
+    if (passNotificationBuffer.empty())
+        return;
+
+    // meshtastic_ClientNotification.message is char[400]; reserve one byte for NUL.
+    constexpr size_t kMsgMax = 399;
+    const std::string full = passNotificationBuffer;
+    passNotificationBuffer.clear();
+
+    size_t pos = 0;
+    for (int ci = 0; ci < 2 && pos < full.size(); ++ci) {
+        meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
+        if (!cn) {
+            LOG_WARN("Valkyrie: ClientNotification alloc failed");
+            break;
+        }
+        size_t len = full.size() - pos;
+        if (len > kMsgMax)
+            len = kMsgMax;
+        memcpy(cn->message, full.data() + pos, len);
+        cn->message[len] = '\0';
+        cn->level = meshtastic_LogRecord_Level_WARNING;
+        cn->time = getValidTime(RTCQualityFromNet);
+        service->sendClientNotification(cn);
+        pos += len;
+    }
+    if (pos < full.size())
+        LOG_WARN("Valkyrie: batched notification truncated (%u bytes unsent)", (unsigned)(full.size() - pos));
 }
 
 // ----------------------------------------------------------------------------
@@ -248,13 +340,13 @@ void BleThreatDetectorModule::stopScanWindow()
 
 int BleThreatDetectorModule::onLightSleep(void *)
 {
-    stopScanWindow();
+    abortBleScanForSleep();
     return 0;
 }
 
 int BleThreatDetectorModule::onDeepSleep(void *)
 {
-    stopScanWindow();
+    abortBleScanForSleep();
     return 0;
 }
 
@@ -268,7 +360,7 @@ bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType ty
     if (!nimbleBluetooth || !nimbleBluetooth->isActive())
         return false;
 
-    stopScanWindow();
+    abortBleScanForSleep();
 
     heartbeatActive = true;
     memcpy(heartbeatTargetMac, mac, 6);
@@ -318,11 +410,7 @@ void BleThreatDetectorModule::stopHeartbeat()
     heartbeatLatchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::None);
 
     if (scan && scanInitialised) {
-        if (scanActive) {
-            scan->stop();
-            scan->clearResults();
-            scanActive = false;
-        }
+        haltBleScan();
         scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/false);
     }
     LOG_INFO("Valkyrie: heartbeat mode stopped");
@@ -391,9 +479,8 @@ int32_t BleThreatDetectorModule::runOnce()
     // fresh window.
     if (scanActive) {
         if (scan && !scan->isScanning()) {
-            scanActive = false;
-            scan->clearResults();
-            lastScanWindowEndMs = millis();
+            haltBleScan();
+            finalizeDutyThreatPass();
             LOG_DEBUG("Valkyrie: scan window complete (%u detections so far)", (unsigned)totalDetections);
             // Constant scan: start the next window in this same tick so `scanActive`
             // does not stay false until the next runOnce (~1000ms), which caused the
@@ -411,7 +498,8 @@ int32_t BleThreatDetectorModule::runOnce()
             // didn't honour the duration arg (rare, but cheaper to
             // be defensive than to debug a stuck scan).
             LOG_WARN("Valkyrie: scan exceeded hard cap, forcing stop");
-            stopScanWindow();
+            haltBleScan();
+            finalizeDutyThreatPass();
         }
         // Tick again soon while a scan is in flight so we notice the
         // completion promptly without holding the watchdog.
@@ -520,63 +608,113 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
         pulseThreatSoundOnce(soundEmittedThisScanWindow);
 #endif
 
-    // 2. Phone delivery via PRIVATE_APP. Only attempt if the upstream
-    //    plumbing is alive — on first boot or right before shutdown
-    //    these can be NULL.
+    // 2. Phone delivery: heartbeat uses immediate PRIVATE_APP + ClientNotification.
+    //    Passive duty uses policy A — batch newline ClientNotification at pass end only (no per-detection PRIVATE_APP).
     if (!router || !service)
         return;
 
-    valkyrie_BleThreatEvent ev = valkyrie_BleThreatEvent_init_zero;
-    ev.timestamp = tsSecs;
-    ev.type = toWireType(cls.type);
-    memcpy(ev.mac, mac, 6);
-    if (name) {
-        strncpy(ev.name, name, sizeof(ev.name) - 1);
-        ev.name[sizeof(ev.name) - 1] = '\0';
-    }
-    ev.rssi = rssi;
-    if (detailBuf[0]) {
-        strncpy(ev.detail, detailBuf, sizeof(ev.detail) - 1);
-        ev.detail[sizeof(ev.detail) - 1] = '\0';
-    }
-    ev.stalking_gps_triggered = gpsStalkingTrigger;
-    ev.stalking_sightings = gpsStalkingSightings;
-    ev.stalking_distinct_places = gpsStalkingPlaces;
+    if (heartbeatActive) {
+        valkyrie_BleThreatEvent ev = valkyrie_BleThreatEvent_init_zero;
+        ev.timestamp = tsSecs;
+        ev.type = toWireType(cls.type);
+        memcpy(ev.mac, mac, 6);
+        if (name) {
+            strncpy(ev.name, name, sizeof(ev.name) - 1);
+            ev.name[sizeof(ev.name) - 1] = '\0';
+        }
+        ev.rssi = rssi;
+        if (detailBuf[0]) {
+            strncpy(ev.detail, detailBuf, sizeof(ev.detail) - 1);
+            ev.detail[sizeof(ev.detail) - 1] = '\0';
+        }
+        ev.stalking_gps_triggered = gpsStalkingTrigger;
+        ev.stalking_sightings = gpsStalkingSightings;
+        ev.stalking_distinct_places = gpsStalkingPlaces;
 
-    meshtastic_MeshPacket *p = router->allocForSending();
-    if (!p) {
-        LOG_WARN("Valkyrie: allocForSending() returned null, dropping threat event");
+        meshtastic_MeshPacket *p = router->allocForSending();
+        if (!p) {
+            LOG_WARN("Valkyrie: allocForSending() returned null, dropping threat event");
+            return;
+        }
+
+        p->decoded.portnum = meshtastic_PortNum_PRIVATE_APP;
+        p->decoded.want_response = false;
+        p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
+
+        size_t encoded = pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &valkyrie_BleThreatEvent_msg,
+                                            &ev);
+        if (encoded == 0) {
+            LOG_WARN("Valkyrie: pb_encode_to_bytes failed, dropping threat event");
+            packetPool.release(p);
+            return;
+        }
+        p->decoded.payload.size = encoded;
+
+        service->sendToPhone(p);
+
+        meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
+        if (cn) {
+            cn->level = meshtastic_LogRecord_Level_WARNING;
+            cn->time = getValidTime(RTCQualityFromNet);
+            snprintf(cn->message, sizeof(cn->message), "Valkyrie: %s %02X:%02X:%02X:%02X:%02X:%02X %d dBm",
+                     threatTypeWireName(cls.type), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi);
+            service->sendClientNotification(cn);
+        }
         return;
     }
 
-    p->decoded.portnum = meshtastic_PortNum_PRIVATE_APP;
-    // allocForSending() defaults `to` to NODENUM_BROADCAST and sets
-    // `from` to our node num — fine for a phone-only payload that
-    // never touches the LoRa channel.
-    p->decoded.want_response = false;
-    p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
-
-    size_t encoded = pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &valkyrie_BleThreatEvent_msg,
-                                        &ev);
-    if (encoded == 0) {
-        LOG_WARN("Valkyrie: pb_encode_to_bytes failed, dropping threat event");
-        packetPool.release(p);
+    if (passNotificationBatchOpen) {
+        appendPassThreatNotificationLine(cls, mac, name, rssi, detailBuf);
         return;
     }
-    p->decoded.payload.size = encoded;
 
-    // sendToPhone, NEVER sendToMesh — Phase 1 is phone-only by design.
-    service->sendToPhone(p);
+    {
+        valkyrie_BleThreatEvent ev = valkyrie_BleThreatEvent_init_zero;
+        ev.timestamp = tsSecs;
+        ev.type = toWireType(cls.type);
+        memcpy(ev.mac, mac, 6);
+        if (name) {
+            strncpy(ev.name, name, sizeof(ev.name) - 1);
+            ev.name[sizeof(ev.name) - 1] = '\0';
+        }
+        ev.rssi = rssi;
+        if (detailBuf[0]) {
+            strncpy(ev.detail, detailBuf, sizeof(ev.detail) - 1);
+            ev.detail[sizeof(ev.detail) - 1] = '\0';
+        }
+        ev.stalking_gps_triggered = gpsStalkingTrigger;
+        ev.stalking_sightings = gpsStalkingSightings;
+        ev.stalking_distinct_places = gpsStalkingPlaces;
 
-    // Stock Meshtastic apps do not surface PRIVATE_APP as user-visible alerts. Push a
-    // ClientNotification so the companion shows the same style of toast/banner as other events.
-    meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
-    if (cn) {
-        cn->level = meshtastic_LogRecord_Level_WARNING;
-        cn->time = getValidTime(RTCQualityFromNet);
-        snprintf(cn->message, sizeof(cn->message), "Valkyrie: %s %02X:%02X:%02X:%02X:%02X:%02X %d dBm",
-                 threatTypeWireName(cls.type), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi);
-        service->sendClientNotification(cn);
+        meshtastic_MeshPacket *p = router->allocForSending();
+        if (!p) {
+            LOG_WARN("Valkyrie: allocForSending() returned null, dropping threat event");
+            return;
+        }
+
+        p->decoded.portnum = meshtastic_PortNum_PRIVATE_APP;
+        p->decoded.want_response = false;
+        p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
+
+        size_t encoded = pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &valkyrie_BleThreatEvent_msg,
+                                            &ev);
+        if (encoded == 0) {
+            LOG_WARN("Valkyrie: pb_encode_to_bytes failed, dropping threat event");
+            packetPool.release(p);
+            return;
+        }
+        p->decoded.payload.size = encoded;
+
+        service->sendToPhone(p);
+
+        meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
+        if (cn) {
+            cn->level = meshtastic_LogRecord_Level_WARNING;
+            cn->time = getValidTime(RTCQualityFromNet);
+            snprintf(cn->message, sizeof(cn->message), "Valkyrie: %s %02X:%02X:%02X:%02X:%02X:%02X %d dBm",
+                     threatTypeWireName(cls.type), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi);
+            service->sendClientNotification(cn);
+        }
     }
 }
 
