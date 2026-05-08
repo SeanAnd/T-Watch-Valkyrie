@@ -61,7 +61,7 @@ struct ValkyriePrefs {
     bool isWifiThreatTypeEnabled(ThreatType t) const;
     void setWifiThreatTypeEnabled(ThreatType t, bool on);
 
-    /** True when runWifiThreatPass would proceed past early prefs checks (WifiThreatPass.cpp). */
+    /** True when `beginWifiThreatPass` would proceed past early prefs checks (WifiThreatPass.cpp). */
     bool isWifiThreatPassConfigured() const;
 };
 

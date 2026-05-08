@@ -9,9 +9,14 @@ class BleThreatDetectorModule;
 namespace valkyrie
 {
 
-/// Passive Wi‑Fi promiscuous sweep at end of a duty-cycle threat pass (after BLE window).
-/// No-op when `!HAS_WIFI`, prefs disable Wi‑Fi scanning, or `mod` is null.
-void runWifiThreatPass(BleThreatDetectorModule *mod);
+/// Start a chunked Wi‑Fi promiscuous pass (returns immediately). Returns false if prefs skip Wi‑Fi or alloc fails.
+bool beginWifiThreatPass(BleThreatDetectorModule *mod);
+
+/// Advance the pass by one scheduler tick. Returns true when the pass has fully finished (success, error, or abort).
+bool tickWifiThreatPass(BleThreatDetectorModule *mod);
+
+/// Tear down radio state if a pass was in progress (sleep / heartbeat handoff).
+void abortWifiThreatPass();
 
 } // namespace valkyrie
 

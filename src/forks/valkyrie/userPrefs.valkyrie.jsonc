@@ -45,6 +45,7 @@
     // Wi‑Fi promiscuous phase (end of each BLE duty pass); NVS keys wifi_en, wifi_msk, wifi_ms, wifi_dw
     "wifiThreatScanEnabled": true,
     "wifiThreatScanMask": 31,
-    "wifiThreatPassMs": 3500,
+    // Default matches scanWindowSecs (10 s) → 10000 ms; see ValkyriePrefs::defaults().
+    "wifiThreatPassMs": 10000,
     "wifiThreatChannelDwellMs": 350
 }

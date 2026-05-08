@@ -53,7 +53,8 @@ ValkyriePrefs ValkyriePrefs::defaults()
     // Match full wifiThreatScanMask default: run Wi‑Fi pass unless user disables master in Settings.
     p.wifiThreatScanEnabled = true;
     p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
-    p.wifiThreatPassMs = 3500;
+    // Default promiscuous scan budget: match default scanWindowSecs (10 s).
+    p.wifiThreatPassMs = 10000;
     p.wifiThreatChannelDwellMs = 350;
     return p;
 }
@@ -243,7 +244,8 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.stalkEntryTtlSecs = 48UL * 3600UL;
     p.wifiThreatScanEnabled = false;
     p.wifiThreatScanMask = ValkyriePrefs::kWifiThreatScanMaskAll;
-    p.wifiThreatPassMs = 3500;
+    // Same default as ESP32 path (mirrors 10 s scan window when enabled).
+    p.wifiThreatPassMs = 10000;
     p.wifiThreatChannelDwellMs = 350;
     return p;
 }

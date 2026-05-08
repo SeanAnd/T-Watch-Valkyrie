@@ -259,20 +259,31 @@ void BleThreatDetectorModule::haltBleScan()
     }
 }
 
-void BleThreatDetectorModule::finalizeDutyThreatPass()
+void BleThreatDetectorModule::finishDutyThreatPassEpilogue()
 {
-    if (!heartbeatActive) {
-        wifiThreatPassActive = true;
-        runWifiThreatPass(this);
-        wifiThreatPassActive = false;
-    }
     flushPassNotification(false);
     passNotificationBatchOpen = false;
     lastScanWindowEndMs = millis();
 }
 
+void BleThreatDetectorModule::finalizeDutyThreatPass()
+{
+    if (heartbeatActive) {
+        finishDutyThreatPassEpilogue();
+        return;
+    }
+    if (valkyrie::beginWifiThreatPass(this)) {
+        wifiThreatPassActive = true;
+        return;
+    }
+    finishDutyThreatPassEpilogue();
+}
+
 void BleThreatDetectorModule::abortBleScanForSleep()
 {
+    valkyrie::abortWifiThreatPass();
+    wifiThreatPassActive = false;
+    deferredConstantBleScanRestart = false;
     haltBleScan();
     flushPassNotification(true);
     passNotificationBatchOpen = false;
@@ -460,6 +471,8 @@ int32_t BleThreatDetectorModule::getHeartbeatSmoothedRssi() const
 
 int32_t BleThreatDetectorModule::runOnce()
 {
+    static constexpr int32_t kWifiThreatPollMs = 20;
+
     if (heartbeatActive) {
         if (!shouldScan()) {
             return 30 * 1000;
@@ -484,6 +497,21 @@ int32_t BleThreatDetectorModule::runOnce()
         return 400;
     }
 
+    if (wifiThreatPassActive) {
+        if (valkyrie::tickWifiThreatPass(this)) {
+            wifiThreatPassActive = false;
+            finishDutyThreatPassEpilogue();
+            if (deferredConstantBleScanRestart) {
+                deferredConstantBleScanRestart = false;
+                if (shouldScan()) {
+                    initScanIfNeeded();
+                    startScanWindow();
+                }
+            }
+        }
+        return kWifiThreatPollMs;
+    }
+
     // If a scan is in flight, check whether it's done. NimBLE 1.4.x
     // auto-stops after the duration we passed to start(), but we still
     // need to clear our scanActive flag so the next tick can launch a
@@ -493,14 +521,13 @@ int32_t BleThreatDetectorModule::runOnce()
             haltBleScan();
             finalizeDutyThreatPass();
             LOG_DEBUG("Valkyrie: scan window complete (%u detections so far)", (unsigned)totalDetections);
-            // Constant scan: start the next window in this same tick so `scanActive`
-            // does not stay false until the next runOnce (~1000ms), which caused the
-            // hub/UI to flash Sleeping between chained windows despite gapMs==0.
-            if (prefs.constantBleScanMode && shouldScan()) {
+            if (wifiThreatPassActive)
+                deferredConstantBleScanRestart = prefs.constantBleScanMode && shouldScan();
+            else if (prefs.constantBleScanMode && shouldScan()) {
                 initScanIfNeeded();
                 startScanWindow();
             }
-            return 1000;
+            return wifiThreatPassActive ? kWifiThreatPollMs : 1000;
         }
         uint32_t elapsedMs = millis() - scanStartedMs;
         uint32_t hardCapMs = (uint32_t)prefs.scanWindowSecs * 1000U + 2000U;
@@ -511,10 +538,16 @@ int32_t BleThreatDetectorModule::runOnce()
             LOG_WARN("Valkyrie: scan exceeded hard cap, forcing stop");
             haltBleScan();
             finalizeDutyThreatPass();
+            if (wifiThreatPassActive)
+                deferredConstantBleScanRestart = prefs.constantBleScanMode && shouldScan();
+            else if (prefs.constantBleScanMode && shouldScan()) {
+                initScanIfNeeded();
+                startScanWindow();
+            }
         }
         // Tick again soon while a scan is in flight so we notice the
         // completion promptly without holding the watchdog.
-        return 1000;
+        return wifiThreatPassActive ? kWifiThreatPollMs : 1000;
     }
 
     if (!shouldScan()) {

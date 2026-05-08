@@ -17,8 +17,6 @@
 
 #include <cstring>
 
-#include "concurrency/OSThread.h"
-
 #if HAS_SCREEN && defined(VALKYRIE_FORK)
 #include "graphics/Screen.h"
 #include "main.h"
@@ -139,7 +137,6 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     if (!wifi80211CopyAddr123(frame, frameLen, addr1, addr2, addr3))
         return;
 
-    // --- Flock Wi‑Fi (flock-you): wildcard probe, else addr2; addr1 sleeper ---
     if (s_prefs.isThreatTypeEnabled(ThreatType::Flock)) {
         uint8_t t0 = 0, st0 = 0;
         wifi80211ParseFrameControl(frame, frameLen, &t0, &st0);
@@ -173,7 +170,6 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
         }
     }
 
-    // --- Deauth / disassociation ---
     if (s_prefs.isWifiThreatTypeEnabled(ThreatType::WifiDeauth) && wifi80211MgmtIsDeauthDisassoc(frame, frameLen)) {
         PendingWifiThreat p{};
         p.type_u8 = (uint8_t)ThreatType::WifiDeauth;
@@ -183,7 +179,6 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
         qSend(p);
     }
 
-    // --- EAPOL (data frames) ---
     if (s_prefs.isWifiThreatTypeEnabled(ThreatType::WifiEapol) && wifi80211DataHasEapol(frame, frameLen, nullptr)) {
         PendingWifiThreat p{};
         p.type_u8 = (uint8_t)ThreatType::WifiEapol;
@@ -193,7 +188,6 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
         qSend(p);
     }
 
-    // --- Beacon-only heuristics ---
     if (type == 0 && subtype == 8) {
         if (s_prefs.isWifiThreatTypeEnabled(ThreatType::WifiMultiSsid)) {
             char ssid[33]{};
@@ -234,12 +228,65 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     }
 }
 
+enum class WifiPassPhase : uint8_t {
+    Idle,
+    InitDisconnectWait,
+    InitModeStaWait,
+    Scan,
+    TeardownWait,
+};
+
+static constexpr uint32_t kDisconnectSettleMs = 10;
+static constexpr uint32_t kStaModeSettleMs = 50;
+static constexpr uint32_t kTeardownSettleMs = 20;
+static constexpr uint8_t kCh[] = {1, 6, 11};
+
+static WifiPassPhase s_phase = WifiPassPhase::Idle;
+static uint32_t s_waitUntilMs = 0;
+static wifi_mode_t s_savedMode = WIFI_OFF;
+static uint32_t s_t0 = 0;
+static uint32_t s_budgetMs = 0;
+static uint8_t s_chIdx = 0;
+static uint32_t s_hopEndMs = 0;
+#if HAS_SCREEN && defined(VALKYRIE_FORK)
+static uint32_t s_lastUiPumpMs = 0;
+#endif
+
+static void resetPassMachine()
+{
+    s_phase = WifiPassPhase::Idle;
+    s_mod = nullptr;
+}
+
+static void finishTeardownAndIdle(BleThreatDetectorModule *mod)
+{
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    drainQueue(mod);
+    WiFi.mode(s_savedMode);
+    s_waitUntilMs = millis() + kTeardownSettleMs;
+    s_phase = WifiPassPhase::TeardownWait;
+}
+
 } // namespace
 
-void runWifiThreatPass(BleThreatDetectorModule *mod)
+void abortWifiThreatPass()
 {
-    if (!mod)
+    if (s_phase == WifiPassPhase::Idle)
         return;
+
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    if (s_mod)
+        drainQueue(s_mod);
+    WiFi.mode(s_savedMode);
+    resetPassMachine();
+}
+
+bool beginWifiThreatPass(BleThreatDetectorModule *mod)
+{
+    if (!mod || s_phase != WifiPassPhase::Idle)
+        return false;
 
     ValkyriePrefs prefs = ValkyriePrefs::load();
 
@@ -253,15 +300,15 @@ void runWifiThreatPass(BleThreatDetectorModule *mod)
     const bool flockEn = prefs.isThreatTypeEnabled(ThreatType::Flock);
 
     if (!prefs.wifiThreatScanEnabled)
-        return;
+        return false;
     if (!wantAnyWifi && !flockEn)
-        return;
+        return false;
 
     if (!s_queue) {
         s_queue = xQueueCreate(48, sizeof(PendingWifiThreat));
         if (!s_queue) {
             LOG_WARN("Valkyrie: WiFi threat queue alloc failed");
-            return;
+            return false;
         }
     }
 
@@ -273,60 +320,88 @@ void runWifiThreatPass(BleThreatDetectorModule *mod)
         xQueueReceive(s_queue, &dump, 0);
     }
 
-    wifi_mode_t savedMode = WiFi.getMode();
+    s_savedMode = WiFi.getMode();
     WiFi.disconnect(true);
-    delay(10);
-    WiFi.mode(WIFI_STA);
-    delay(50);
+    s_waitUntilMs = millis() + kDisconnectSettleMs;
+    s_phase = WifiPassPhase::InitDisconnectWait;
+    return true;
+}
 
-    esp_wifi_set_promiscuous_rx_cb(&promiscCb);
-    esp_err_t promOk = esp_wifi_set_promiscuous(true);
-    if (promOk != ESP_OK) {
-        LOG_WARN("Valkyrie: esp_wifi_set_promiscuous(true) failed %d", (int)promOk);
-        WiFi.mode(savedMode);
-        s_mod = nullptr;
-        return;
+bool tickWifiThreatPass(BleThreatDetectorModule *mod)
+{
+    const uint32_t now = millis();
+
+    if (s_phase == WifiPassPhase::Idle)
+        return true;
+
+    if (!mod || mod != s_mod) {
+        abortWifiThreatPass();
+        return true;
     }
 
-    static const uint8_t kCh[] = {1, 6, 11};
-    const uint32_t t0 = millis();
-    const uint32_t budget = prefs.wifiThreatPassMs;
-#if HAS_SCREEN && defined(VALKYRIE_FORK)
-    uint32_t lastUiPumpMs = millis();
-    if (screen)
-        screen->repaintFrameNow();
-#endif
+    switch (s_phase) {
+    case WifiPassPhase::InitDisconnectWait:
+        if ((int32_t)(now - s_waitUntilMs) < 0)
+            return false;
+        WiFi.mode(WIFI_STA);
+        s_waitUntilMs = now + kStaModeSettleMs;
+        s_phase = WifiPassPhase::InitModeStaWait;
+        return false;
 
-    while (millis() - t0 < budget) {
-        for (unsigned i = 0; i < sizeof(kCh) / sizeof(kCh[0]); ++i) {
-            if (millis() - t0 >= budget)
-                break;
-            esp_wifi_set_channel(kCh[i], WIFI_SECOND_CHAN_NONE);
-            const uint32_t hopEnd = millis() + prefs.wifiThreatChannelDwellMs;
-            while (millis() < hopEnd && millis() - t0 < budget) {
-                drainQueue(mod);
-#if HAS_SCREEN && defined(VALKYRIE_FORK)
-                const uint32_t nowMs = millis();
-                if (screen && nowMs - lastUiPumpMs >= 50) {
-                    lastUiPumpMs = nowMs;
-                    screen->repaintFrameNow();
-                }
-#endif
-                concurrency::serviceMainThreadsExcept(mod->threadForSchedulerSkip());
-                delay(5);
-            }
+    case WifiPassPhase::InitModeStaWait:
+        if ((int32_t)(now - s_waitUntilMs) < 0)
+            return false;
+        esp_wifi_set_promiscuous_rx_cb(&promiscCb);
+        if (esp_wifi_set_promiscuous(true) != ESP_OK) {
+            LOG_WARN("Valkyrie: esp_wifi_set_promiscuous(true) failed");
+            WiFi.mode(s_savedMode);
+            resetPassMachine();
+            return true;
         }
+        s_t0 = now;
+        s_budgetMs = s_prefs.wifiThreatPassMs;
+        s_chIdx = 0;
+        esp_wifi_set_channel(kCh[0], WIFI_SECOND_CHAN_NONE);
+        s_hopEndMs = now + s_prefs.wifiThreatChannelDwellMs;
+        s_phase = WifiPassPhase::Scan;
+#if HAS_SCREEN && defined(VALKYRIE_FORK)
+        s_lastUiPumpMs = now;
+        if (screen)
+            screen->repaintFrameNow();
+#endif
+        return false;
+
+    case WifiPassPhase::Scan: {
+        if (now - s_t0 >= s_budgetMs) {
+            finishTeardownAndIdle(mod);
+            return false;
+        }
+        drainQueue(mod);
+#if HAS_SCREEN && defined(VALKYRIE_FORK)
+        if (screen && now - s_lastUiPumpMs >= 50) {
+            s_lastUiPumpMs = now;
+            screen->repaintFrameNow();
+        }
+#endif
+        if (now >= s_hopEndMs) {
+            s_chIdx = static_cast<uint8_t>((s_chIdx + 1) % (sizeof(kCh) / sizeof(kCh[0])));
+            esp_wifi_set_channel(kCh[s_chIdx], WIFI_SECOND_CHAN_NONE);
+            s_hopEndMs = now + s_prefs.wifiThreatChannelDwellMs;
+        }
+        return false;
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    drainQueue(mod);
+    case WifiPassPhase::TeardownWait:
+        if ((int32_t)(now - s_waitUntilMs) < 0)
+            return false;
+        resetPassMachine();
+        LOG_DEBUG("Valkyrie: WiFi threat pass complete");
+        return true;
 
-    WiFi.mode(savedMode);
-    delay(20);
-    s_mod = nullptr;
-
-    LOG_DEBUG("Valkyrie: WiFi threat pass complete");
+    default:
+        resetPassMachine();
+        return true;
+    }
 }
 
 } // namespace valkyrie
@@ -335,7 +410,9 @@ void runWifiThreatPass(BleThreatDetectorModule *mod)
 
 namespace valkyrie
 {
-void runWifiThreatPass(BleThreatDetectorModule *) {}
+bool beginWifiThreatPass(BleThreatDetectorModule *) { return false; }
+bool tickWifiThreatPass(BleThreatDetectorModule *) { return true; }
+void abortWifiThreatPass() {}
 } // namespace valkyrie
 
 #endif // HAS_WIFI

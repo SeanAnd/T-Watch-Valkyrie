@@ -48,9 +48,6 @@ namespace valkyrie
 class BleThreatDetectorModule : private concurrency::OSThread
 {
   public:
-    /** For cooperative yield during long synchronous work (private OSThread base). */
-    Thread *threadForSchedulerSkip() { return static_cast<concurrency::OSThread *>(this); }
-
     explicit BleThreatDetectorModule(const ValkyriePrefs &prefs);
     ~BleThreatDetectorModule();
 
@@ -93,6 +90,8 @@ class BleThreatDetectorModule : private concurrency::OSThread
     void haltBleScan();
     /// End of duty-cycle BLE phase: Wi‑Fi promiscuous pass when enabled (passive duty only), then lastScanWindowEndMs.
     void finalizeDutyThreatPass();
+    /// Flush batched notifications and stamp `lastScanWindowEndMs` after BLE + optional Wi‑Fi pass.
+    void finishDutyThreatPassEpilogue();
     /// Fast teardown before LS/deep sleep or when handing off to heartbeat: no Wi‑Fi pass.
     void abortBleScanForSleep();
 
@@ -150,8 +149,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     uint32_t lastScanWindowEndMs = 0;
     /// When the BLE phase stopped (`haltBleScan`); hub uses this so Wi‑Fi promiscuous time does not reuse the sleep timeline.
     uint32_t hubBleWindowEndMs = 0;
-    /// True while synchronous Wi‑Fi promiscuous threat pass runs (hub status).
+    /// True while the chunked Wi‑Fi promiscuous threat pass is in progress (hub status).
     volatile bool wifiThreatPassActive = false;
+    /// If constant BLE scan is on, start the next window only after async Wi‑Fi pass completes.
+    bool deferredConstantBleScanRestart = false;
 
     // For diagnostics / future UI.
     uint32_t totalDetections = 0;
