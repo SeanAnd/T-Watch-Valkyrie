@@ -40,4 +40,11 @@ bool wifi80211MacMatchesSuspiciousVendorOui(const uint8_t mac[6], bool privacyOn
 /// Heuristic: JSON-ish beacon containing Pwnagotchi markers ("pwnd_tot" + "name").
 bool wifi80211BeaconLooksLikePwnagotchi(const uint8_t *frame, size_t len);
 
+/// ASTM/OpenDroneID Wi‑Fi NAN-style signature (matches Sky-Spy dest MAC gate): management frame with Addr1 ==
+/// 51:6f:9a:01:00:00. Does not decode payload — fingerprint only.
+bool wifi80211MgmtRemoteIdNanSignature(const uint8_t *frame, size_t len);
+
+/// Beacon carrying vendor IE 0xDD with ASTM/OpenDroneID OUIs (90:3a:e6 or fa:0b:bc per Sky-Spy). Fingerprint only.
+bool wifi80211BeaconHasRemoteIdVendorIe(const uint8_t *frame, size_t len);
+
 } // namespace valkyrie

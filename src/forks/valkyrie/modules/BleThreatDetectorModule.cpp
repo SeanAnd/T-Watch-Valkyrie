@@ -636,6 +636,9 @@ void BleThreatDetectorModule::emitWifiThreat(const ClassificationResult &cls, co
     if (cls.type == ThreatType::Flock) {
         if (!prefs.isThreatTypeEnabled(ThreatType::Flock))
             return;
+    } else if (cls.type == ThreatType::Drone) {
+        if (!prefs.isThreatTypeEnabled(ThreatType::Drone))
+            return;
     } else if (static_cast<uint8_t>(cls.type) >= 7 && static_cast<uint8_t>(cls.type) <= 11) {
         if (!prefs.isWifiThreatTypeEnabled(cls.type))
             return;

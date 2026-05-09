@@ -116,6 +116,8 @@ inline bool ValkyriePrefs::isWifiThreatPassConfigured() const
         return false;
     if (isThreatTypeEnabled(ThreatType::Flock))
         return true;
+    if (isThreatTypeEnabled(ThreatType::Drone))
+        return true;
     for (unsigned u = 7; u <= 11; ++u) {
         if (isWifiThreatTypeEnabled(static_cast<ThreatType>((uint8_t)u)))
             return true;

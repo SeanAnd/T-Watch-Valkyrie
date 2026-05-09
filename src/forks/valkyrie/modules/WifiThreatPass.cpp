@@ -137,6 +137,22 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     if (!wifi80211CopyAddr123(frame, frameLen, addr1, addr2, addr3))
         return;
 
+    if (type == 0 && s_prefs.isThreatTypeEnabled(ThreatType::Drone)) {
+        const bool nanHit = wifi80211MgmtRemoteIdNanSignature(frame, frameLen);
+        const bool beaconIe = (subtype == 8) && wifi80211BeaconHasRemoteIdVendorIe(frame, frameLen);
+        if (nanHit || beaconIe) {
+            PendingWifiThreat p{};
+            p.type_u8 = (uint8_t)ThreatType::Drone;
+            memcpy(p.mac, addr2, 6);
+            p.rssi = rssi;
+            if (nanHit)
+                strncpy(p.detail, "wifi_nan", sizeof(p.detail) - 1);
+            else
+                strncpy(p.detail, "wifi_beacon_ie", sizeof(p.detail) - 1);
+            qSend(p);
+        }
+    }
+
     if (s_prefs.isThreatTypeEnabled(ThreatType::Flock)) {
         uint8_t t0 = 0, st0 = 0;
         wifi80211ParseFrameControl(frame, frameLen, &t0, &st0);
@@ -298,10 +314,11 @@ bool beginWifiThreatPass(BleThreatDetectorModule *mod)
         }
     }
     const bool flockEn = prefs.isThreatTypeEnabled(ThreatType::Flock);
+    const bool droneEn = prefs.isThreatTypeEnabled(ThreatType::Drone);
 
     if (!prefs.wifiThreatPhaseEnabled)
         return false;
-    if (!wantAnyWifi && !flockEn)
+    if (!wantAnyWifi && !flockEn && !droneEn)
         return false;
 
     if (!s_queue) {

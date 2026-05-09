@@ -127,6 +127,54 @@ void test_multissid_hash_distinct()
     EXPECT(h1 != h2, "hash differs");
 }
 
+void test_remoteid_nan_signature()
+{
+    uint8_t buf[64]{};
+    buf[0] = 0xD0; // mgmt + action
+    buf[1] = 0x00;
+    static const uint8_t nanDa[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
+    memcpy(buf + 4, nanDa, 6);
+    memset(buf + 10, 0xAA, 6);
+    memset(buf + 16, 0xBB, 6);
+    EXPECT(valkyrie::wifi80211MgmtRemoteIdNanSignature(buf, 24), "NAN RemoteID dest MAC");
+    buf[4] = 0xFF;
+    EXPECT(!valkyrie::wifi80211MgmtRemoteIdNanSignature(buf, 24), "wrong DA rejects");
+}
+
+void test_remoteid_beacon_vendor_ie()
+{
+    uint8_t buf[128]{};
+    buf[0] = 0x80;
+    buf[1] = 0x00;
+    memset(buf + 4, 0xFF, 6);
+    static const uint8_t ap[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    memcpy(buf + 10, ap, 6);
+    memcpy(buf + 16, ap, 6);
+    memset(buf + 24, 0, 8);
+    buf[32] = 0x64;
+    buf[33] = 0x00;
+    buf[34] = 0x00;
+    buf[35] = 0x00;
+    // SSID IE len 0 (hidden)
+    buf[36] = 0;
+    buf[37] = 0;
+    // Vendor IE 0xDD: OUI 90:3a:e6 + type + padding
+    buf[38] = 0xDD;
+    buf[39] = 8;
+    buf[40] = 0x90;
+    buf[41] = 0x3a;
+    buf[42] = 0xe6;
+    buf[43] = 0;
+    memset(buf + 44, 0, 5);
+    EXPECT(valkyrie::wifi80211BeaconHasRemoteIdVendorIe(buf, 49), "beacon ASTM vendor OUI");
+    buf[40] = 0xfa;
+    buf[41] = 0x0b;
+    buf[42] = 0xbc;
+    EXPECT(valkyrie::wifi80211BeaconHasRemoteIdVendorIe(buf, 49), "beacon alt vendor OUI");
+    buf[40] = 0x00;
+    EXPECT(!valkyrie::wifi80211BeaconHasRemoteIdVendorIe(buf, 49), "wrong OUI rejects");
+}
+
 } // namespace
 
 int main()
@@ -137,6 +185,8 @@ int main()
     test_eapol_llc();
     test_beacon_ssid_open();
     test_multissid_hash_distinct();
+    test_remoteid_nan_signature();
+    test_remoteid_beacon_vendor_ie();
     if (g_failures == 0)
         std::printf("All WiFi frame classifier tests passed.\n");
     else

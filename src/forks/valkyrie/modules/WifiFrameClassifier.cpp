@@ -179,6 +179,42 @@ bool wifi80211MacMatchesSuspiciousVendorOui(const uint8_t mac[6], bool privacyOn
     return false;
 }
 
+bool wifi80211MgmtRemoteIdNanSignature(const uint8_t *frame, size_t len)
+{
+    uint8_t t, st;
+    if (!wifi80211ParseFrameControl(frame, len, &t, &st) || t != 0)
+        return false;
+    if (len < 16)
+        return false;
+    static const uint8_t nanDa[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
+    return memcmp(frame + 4, nanDa, 6) == 0;
+}
+
+bool wifi80211BeaconHasRemoteIdVendorIe(const uint8_t *frame, size_t len)
+{
+    uint8_t t, st;
+    if (!wifi80211ParseFrameControl(frame, len, &t, &st) || t != 0 || st != 8)
+        return false;
+    if (len < 38)
+        return false;
+    size_t pos = 36;
+    while (pos + 2 <= len) {
+        uint8_t id = frame[pos];
+        uint8_t elen = frame[pos + 1];
+        if (pos + 2 + elen > len)
+            break;
+        if (id == 0xDD && elen >= 8) {
+            const uint8_t *d = frame + pos + 2;
+            if (d[0] == 0x90 && d[1] == 0x3a && d[2] == 0xe6)
+                return true;
+            if (d[0] == 0xfa && d[1] == 0x0b && d[2] == 0xbc)
+                return true;
+        }
+        pos += 2 + elen;
+    }
+    return false;
+}
+
 bool wifi80211BeaconLooksLikePwnagotchi(const uint8_t *frame, size_t len)
 {
     uint8_t t, st;

@@ -97,7 +97,7 @@ void showThreatsMenu()
             ThreatType t = kBleThreatOrder[(size_t)row];
             const bool wasEnabled = p.isThreatTypeEnabled(t);
             p.setThreatTypeEnabled(t, !wasEnabled);
-            if (!wasEnabled && t == ThreatType::Flock)
+            if (!wasEnabled && (t == ThreatType::Flock || t == ThreatType::Drone))
                 p.wifiThreatPhaseEnabled = true;
         } else if (row < (int)kTotalRows) {
             ThreatType t = kWifiThreatOrder[(size_t)row - kNumBleThreatTypes];
