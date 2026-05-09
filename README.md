@@ -86,7 +86,7 @@ Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-An **alerts** menu (or equivalent) that stores preferences after reboot for **per-threat-type** audible and haptic behavior. Today we have global detector on/off, per-type *scanning*, constant scan mode, and one haptic per window, not per-threat alert routing.
+A cooldown period on alerts per threat+identifier to prevent spam
 
 **WiFi promiscuous-mode** threat detection (DEAUTH / EAPOL / PWNAGOTCHI / PINEAPPLE / MULTISSID / EVILPORTAL) with a cooperative scan-window radio-share design. Will live under `forks/valkyrie/modules/WifiThreatDetectorModule.{h,cpp}` with the same fork-overlay pattern. Toggle-on because it will likely cause a small hiccup in phone connectivity roughly 2-5 seconds every few minutes due to shared BLE/Wi-Fi.
 

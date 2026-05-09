@@ -5,6 +5,7 @@
 #include "BleThreatDetectorModule.h"
 #include "FlockOuiTable.h"
 #include "WifiFrameClassifier.h"
+#include "WifiThreatPassPolicy.h"
 #include "configuration.h"
 #include "prefs/ValkyriePrefs.h"
 
@@ -259,11 +260,20 @@ static constexpr uint8_t kCh[] = {1, 6, 11};
 
 static WifiPassPhase s_phase = WifiPassPhase::Idle;
 static uint32_t s_waitUntilMs = 0;
-static wifi_mode_t s_savedMode = WIFI_OFF;
 static uint32_t s_t0 = 0;
 static uint32_t s_budgetMs = 0;
 static uint8_t s_chIdx = 0;
 static uint32_t s_hopEndMs = 0;
+// Sticky once true: arduino-esp32's WIFI_OFF path calls esp_wifi_deinit()
+// internally, and each esp_wifi_init/deinit pair leaks ~48 bytes of
+// ESP-IDF event-handler bookkeeping. We pay the WIFI_STA init cost on the
+// first pass and then keep the *driver* alive between passes; the radio
+// itself is powered down via esp_wifi_stop() at teardown and brought back
+// up via esp_wifi_start() at the next hot-path begin to save the modem
+// idle current (~15-20 mA) without re-init'ing. The cold/hot decision is
+// formalised in WifiThreatPassPolicy.h and locked in by
+// test_wifi_threat_pass_policy/test_main.cpp.
+static bool s_wifiStaInitialised = false;
 #if HAS_SCREEN && defined(VALKYRIE_FORK)
 static uint32_t s_lastUiPumpMs = 0;
 #endif
@@ -279,7 +289,12 @@ static void finishTeardownAndIdle(BleThreatDetectorModule *mod)
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     drainQueue(mod);
-    WiFi.mode(s_savedMode);
+    // Deliberately do NOT call WiFi.mode(...) here. Cycling back through
+    // WIFI_OFF and back to WIFI_STA on the next pass leaks ~48 bytes per
+    // cycle (see s_wifiStaInitialised comment). Power the modem down via
+    // esp_wifi_stop() instead; driver state and event handlers are kept,
+    // so esp_wifi_start() on the next pass is a clean restart.
+    esp_wifi_stop();
     s_waitUntilMs = millis() + kTeardownSettleMs;
     s_phase = WifiPassPhase::TeardownWait;
 }
@@ -295,7 +310,11 @@ void abortWifiThreatPass()
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     if (s_mod)
         drainQueue(s_mod);
-    WiFi.mode(s_savedMode);
+    // Same rationale as finishTeardownAndIdle: stay in STA, do not toggle
+    // WIFI_OFF, to avoid the per-cycle arduino-esp32 init/deinit leak.
+    // Power the modem down via stop() so the driver can be re-started
+    // cleanly by the next pass.
+    esp_wifi_stop();
     resetPassMachine();
 }
 
@@ -337,10 +356,26 @@ bool beginWifiThreatPass(BleThreatDetectorModule *mod)
         xQueueReceive(s_queue, &dump, 0);
     }
 
-    s_savedMode = WiFi.getMode();
-    WiFi.disconnect(true);
-    s_waitUntilMs = millis() + kDisconnectSettleMs;
-    s_phase = WifiPassPhase::InitDisconnectWait;
+    using wifi_threat_pass_policy::BeginDecision;
+    using wifi_threat_pass_policy::decideBegin;
+    using wifi_threat_pass_policy::Phase;
+
+    const BeginDecision d = decideBegin(s_wifiStaInitialised);
+    if (d.needWifiDisconnect) {
+        // Cold path: drop any existing AP association without forcing
+        // WIFI_OFF (disconnect(true) is what triggers the leaky deinit).
+        WiFi.disconnect(false);
+        s_waitUntilMs = millis() + kDisconnectSettleMs;
+    } else {
+        // Hot path: WiFi driver still in STA, but the modem was powered
+        // down via esp_wifi_stop() at the previous teardown. Bring the
+        // radio back up and use the same settle window the cold path
+        // uses for WiFi.mode(WIFI_STA).
+        esp_wifi_start();
+        s_waitUntilMs = millis() + kStaModeSettleMs;
+    }
+    s_phase = (d.nextPhase == Phase::InitDisconnectWait) ? WifiPassPhase::InitDisconnectWait
+                                                         : WifiPassPhase::InitModeStaWait;
     return true;
 }
 
@@ -361,6 +396,7 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
         if ((int32_t)(now - s_waitUntilMs) < 0)
             return false;
         WiFi.mode(WIFI_STA);
+        s_wifiStaInitialised = true;
         s_waitUntilMs = now + kStaModeSettleMs;
         s_phase = WifiPassPhase::InitModeStaWait;
         return false;
@@ -371,7 +407,9 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
         esp_wifi_set_promiscuous_rx_cb(&promiscCb);
         if (esp_wifi_set_promiscuous(true) != ESP_OK) {
             LOG_WARN("Valkyrie: esp_wifi_set_promiscuous(true) failed");
-            WiFi.mode(s_savedMode);
+            // No mode restore here either; if init succeeded but
+            // promiscuous failed, leaving STA up is consistent with the
+            // hot-path invariant and avoids the leaky WIFI_OFF cycle.
             resetPassMachine();
             return true;
         }

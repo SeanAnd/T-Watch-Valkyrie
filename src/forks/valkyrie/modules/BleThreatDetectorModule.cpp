@@ -111,6 +111,7 @@ static void pulseThreatSoundOnce(bool &latch)
 // BleThreatDetectorModule (owned by ValkyrieFork.cpp).
 BleThreatDetectorModule *g_module = nullptr;
 
+
 // NimBLE 1.4.3 (pinned by upstream Meshtastic for esp32/esp32s3) uses
 // the `NimBLEAdvertisedDeviceCallbacks` subclass shape. The callback
 // just hands the raw advertised device to the module and returns; the
