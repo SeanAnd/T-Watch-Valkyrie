@@ -10,10 +10,11 @@ minimal and behind `#if defined(VALKYRIE_FORK)` (and the same macro plus
 
 | Upstream file | What changes |
 |---------------|----------------|
-| [`firmware/src/modules/Modules.cpp`](../../modules/Modules.cpp) | `VALKYRIE_FORK` + `__has_include("forks/valkyrie/ValkyrieFork.h")` (include + `valkyrie::setupFork()` at end of `setupModules()`). Stock builds exclude `forks/valkyrie/` via `arduino_base.build_src_filter`. |
-| [`firmware/src/graphics/Screen.cpp`](../../graphics/Screen.cpp), [`Screen.h`](../../graphics/Screen.h) | Hub frame + long-press opens Valkyrie menu when `VALKYRIE_FORK`. |
-| [`firmware/src/graphics/draw/MenuHandler.cpp`](../../graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](../../graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK`. |
-| [`firmware/variants/esp32s3/t-watch-s3-valkyrie/platformio.ini`](../../../variants/esp32s3/t-watch-s3-valkyrie/platformio.ini) | Parallel env: `-DVALKYRIE_FORK=1`, include path, `build_src_filter` for `forks/valkyrie/`. |
+| [`src/modules/Modules.cpp`](src/modules/Modules.cpp) | `VALKYRIE_FORK` + `__has_include("forks/valkyrie/ValkyrieFork.h")` (include + `valkyrie::setupFork()` at end of `setupModules()`). Stock builds exclude `forks/valkyrie/` via `arduino_base.build_src_filter`. |
+| [`src/graphics/Screen.cpp`](src/graphics/Screen.cpp), [`Screen.h`](src/graphics/Screen.h) | Hub frame + long-press opens Valkyrie menu when `VALKYRIE_FORK`. |
+| [`src/graphics/draw/MenuHandler.cpp`](src/graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](src/graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK`. |
+| [`src/input/InputBroker.cpp`](src/input/InputBroker.cpp) | Heartbeat input hook when `VALKYRIE_FORK`. |
+| [`variants/esp32s3/t-watch-s3-valkyrie/platformio.ini`](variants/esp32s3/t-watch-s3-valkyrie/platformio.ini) | Parallel env: `-DVALKYRIE_FORK=1`, `-Isrc/forks/valkyrie`, `build_src_filter` for `forks/valkyrie/` (test subtree excluded from firmware). |
 
 Non-Valkyrie builds never define `VALKYRIE_FORK` and do not compile `src/forks/valkyrie/` (see root `platformio.ini` `arduino_base.build_src_filter`), so fork code and graphics hooks compile out.
 
@@ -23,16 +24,28 @@ Non-Valkyrie builds never define `VALKYRIE_FORK` and do not compile `src/forks/v
 forks/valkyrie/
   ValkyrieFork.{h,cpp}              entry point invoked from Modules.cpp
   modules/
-    BleThreatDetectorModule.{h,cpp} OSThread that owns the NimBLE scan
-    BleClassifier.{h,cpp}           pure: payload -> ThreatType
+    BleThreatDetectorModule.{h,cpp} OSThread: BLE scan, duty cycle, Wi‑Fi pass
+    BleClassifier.{h,cpp}           pure: BLE payload -> ThreatType
+    WifiThreatPass.{h,cpp}          Wi‑Fi promiscuous pass (HAS_WIFI)
+    WifiThreatPassPolicy.h          pure cold/hot/teardown policy (host-testable)
+    WifiFrameClassifier.{h,cpp}     pure 802.11 parsers / heuristics
+    FlockOuiTable.h                 Flock infra OUI matching (Wi‑Fi path)
+    AirtagStalkingState.{h,cpp}     GPS-backed stalking gate for AirTag
+    GeoStalking.{h,cpp}             GPS lock or fixed position for stalking
+  ui/                               menus, hub frame, heartbeat UI/input
   prefs/
     ValkyriePrefs.{h,cpp}           private NVS namespace via Preferences
   persist/
     ThreatLog.{h,cpp}               LittleFS append + 32 KB rotate
+    ThreatIgnoreList.{h,cpp}        NVS ignore list backing store
   proto/
     threat_event.proto              fork-local nanopb schema
     generated/                      pre-generated nanopb sources
-  test/                             native unit tests for the classifier
+  test/                             fork-local native smoke tests (not in firmware image)
+  sprites/                          hub / heartbeat RGB565 assets
+  HeartbeatRssiFilter.{h,cpp}       heartbeat proximity filtering
+  HeartbeatSignalTier.{h,cpp}       RSSI -> UI tier
+  ThreatTypeUi.{h,cpp}              threat labels for menus
   userPrefs.valkyrie.jsonc          fork-only defaults (NOT upstream's)
   regen-proto.sh                    fork-only nanopb generator
 ```
@@ -40,12 +53,12 @@ forks/valkyrie/
 ## Build
 
 A parallel PlatformIO env `t-watch-s3-valkyrie` is shipped in
-`firmware/variants/esp32s3/t-watch-s3-valkyrie/platformio.ini` and is
+`variants/esp32s3/t-watch-s3-valkyrie/platformio.ini` and is
 auto-discovered by `extra_configs = variants/*/*/platformio.ini`. It
-extends the upstream `t-watch-s3` env and only adds:
+extends the upstream `t-watch-s3` env and adds `-DVALKYRIE_FORK=1`,
+include path, and `+<forks/valkyrie/>` in `build_src_filter`.
 
-- `-DVALKYRIE_FORK=1`
-- `build_src_filter += <forks/valkyrie/>`
+Run commands from the `firmware/` directory:
 
 ```bash
 pio run -e t-watch-s3-valkyrie
@@ -54,31 +67,30 @@ pio run -e t-watch-s3-valkyrie -t upload --upload-port /dev/ttyACM0
 
 The original `t-watch-s3` env still builds unchanged.
 
-## Hub UI (BLE scan sprite)
+## Hub UI (BLE + Wi‑Fi sprites)
 
-The Valkyrie hub chibi is driven by `BleThreatDetectorModule` timing, not redraw rate: when a BLE scan window starts, the hub plays the five-frame “start scan” clip forward, then loops three “scanning” frames while `isScanActive()` is true. After the BLE window completes, a wardriving-style **threat pass** runs the Wi-Fi placeholder (stub today), then `lastScanWindowEndMs` updates; the start clip plays in reverse for the same duration, then the hub plays the five-frame “start sleep” clip forward and loops three “sleeping” frames until the next window; when scanning resumes, “start sleep” plays in reverse (wake) before the scan intro plays again. If no pass has completed yet this session (`lastScanWindowEndMs == 0`), or detection is off or the module is absent, the hub stays on the idle sprite.
+The Valkyrie hub chibi is driven by `BleThreatDetectorModule` timing, not redraw rate: when a BLE scan window starts, the hub plays wake (reverse sleep strip), the BLE “start scan” clip forward, then loops three BLE “scanning” frames while `isScanActive()` is true. When the BLE window stops, `hubBleWindowEndMs` anchors the synchronous Wi‑Fi promiscuous pass (`isWifiThreatPassActive()`): the BLE “start scan” strip plays in reverse, then the Wi‑Fi “start scan” strip forward and three Wi‑Fi scan loop frames until the pass ends. When the full threat pass completes, `lastScanWindowEndMs` updates; if Wi‑Fi ran, the Wi‑Fi strip reverses, then sleep intro + sleep loop (if Wi‑Fi was skipped, the shorter BLE-only outro still applies). Between passes, sleep loops until the next window; waking reverses “start sleep” before the scan intro. If no pass has completed yet (`lastScanWindowEndMs == 0`), or detection is off or the module is absent, the hub stays on the idle sprite.
 
 ## Features
 
 What actually ships in this fork today.
 
-- **BLE-only passive scan.** The 2.4 GHz radio is shared with the existing NimBLE GATT server, so scanning piggybacks on it.
-- **Classifier** (ported from `WiFiScan.cpp` lines 894-989 of upstream ESP32Valkyrie where applicable): AirTag / Find My (TLV-aware `0x004C` manufacturer parsing + legacy fallbacks), Flipper Zero, HC-03/05/06 skimmer, Flock camera, Meta Ray-Ban / Quest smart glasses, drone RemoteID broadcasts over BLE. Wi-Fi-side RemoteID parsing stays Phase 2 (future).
-- **AirTag + GPS stalking gate** (when GPS lock or fixed position is usable): multi-sight + multi-place correlation before emit; see [forks/valkyrie/README.md](src/forks/valkyrie/README.md).
-- **Power-aware scheduling:** duty-cycled BLE scan window (defaults ~10 s scan every ~30 s between **threat pass** starts; idle gap is `max(0, scanIntervalSecs - scanWindowSecs)` in NVS). Each pass ends with a Wi-Fi threat **placeholder** (real scanning Phase 2), then hub timing updates. Gated on `PowerFSM` state and battery percentage, aborted on `notifyDeepSleep` / `notifyLightSleep`.
-- **Sink:** detections written to `/valkyrie/threats.log` on LittleFS (rotate at 32 KB). The intent is to also emit them to the paired phone over `meshtastic_PortNum_PRIVATE_APP` via `service->sendToPhone()` (we never call `sendToMesh()`; stays off the LoRa channel). **That phone path is broken in practice right now;** see [Known issues](#known-issues).
-- **Valkyrie menu:** Bluetooth toggle, WiFi toggle (when the build has WiFi), **Settings** (enable/disable detector, constant vs interval BLE scan), **Threat log** (paged viewer over the on-device CSV), **Threats** (per threat-type scan toggles, persisted in NVS), **Ignored devices** (ignore list UI).
-- **Ignore list (NVS):** up to 32 `(threat type, MAC)` pairs. While ignored, a device does not trigger log append, haptic, or phone `PRIVATE_APP` events. **Randomized BLE addresses** rotate over time, so MAC-based ignores can stop matching the same physical device.
+- **BLE passive scan.** The 2.4 GHz radio is shared with the existing NimBLE GATT server, so scanning piggybacks on it.
+- **Wi‑Fi promiscuous threat pass** (`WifiThreatPass.cpp`, when `HAS_WIFI` and prefs allow): hops channels **1 / 6 / 11**, passive classification via **`WifiFrameClassifier`** — Flock infra OUI + wildcard probe requests (`FlockOuiTable.h`), **deauth/disassoc**, **EAPOL**, **multi‑SSID** beacons, **Pwnagotchi**-style JSON beacon heuristic, **suspicious AP** vendor OUIs (incl. Pineapple-class), **OpenDroneID / RemoteID Wi‑Fi fingerprints** (NAN destination MAC + vendor IE OUIs per Sky‑Spy; detection only, no full telemetry decode). Implementation lives in **`WifiThreatPass`** / **`WifiFrameClassifier`**, not a separate `WifiThreatDetectorModule`.
+- **Wi‑Fi driver lifecycle:** STA mode is initialized once and the driver stays resident so we never hit per-cycle `esp_wifi_deinit()` (that path leaked ~48 B/cycle). Between passes the modem is powered down with **`esp_wifi_stop()`** and brought back with **`esp_wifi_start()`** for lower idle current; **`WifiThreatPassPolicy.h`** documents the cold/hot/teardown contract. After the first Wi‑Fi pass, a baseline of internal heap remains reserved for the driver for the rest of uptime (stable vs leaking). **LoRa (SX126x)** is unrelated — separate SPI radio.
+- **Classifier (BLE)** (patterns from upstream ESP32Valkyrie `WiFiScan.cpp` where applicable): AirTag / Find My (TLV-aware `0x004C` manufacturer parsing + legacy fallbacks), Flipper Zero, HC‑03/05/06 skimmer, Flock camera, Meta Ray‑Ban / Quest smart glasses, drone RemoteID over BLE (service `0xFFFA`).
+- **AirTag + GPS stalking gate:** when `readGeoForStalking()` is true (GPS lock **or** `config.position.fixed_position`, non-zero lat/lon), **only** `ThreatType::Airtag` must meet an AirGuard-style rule before log/haptic/phone emit: at least `stalkMinSightings` (default 3) sightings and `stalkMinDistinctPlaces` (default 2) distinct ~`stalkMinSeparationM` grid cells for the same BLE MAC. Without position, AirTag uses pattern match + `dedupeWindowSecs` only. Correlation is **by MAC**; rotating addresses limit reliability. Thresholds in NVS (`stk_*`) / `userPrefs.valkyrie.jsonc`.
+- **Power-aware scheduling:** duty-cycled BLE scan window (defaults ~10 s scan every ~30 s between threat-pass starts; idle gap `max(0, scanIntervalSecs - scanWindowSecs)` in NVS). Each pass ends with the Wi‑Fi promiscuous phase when enabled, then hub timing updates. Gated on `PowerFSM` state and battery percentage; aborted on `notifyDeepSleep` / `notifyLightSleep`.
+- **Sink:** detections written to `/valkyrie/threats.log` on LittleFS (rotate at 32 KB). On paired BLE, events also go to the phone as **`meshtastic_PortNum_PRIVATE_APP`** protobuf (`sendToPhone()`), plus **`ClientNotification`** bursts at pass end / immediate alerts where applicable — traffic stays off LoRa (`sendToMesh()` is not used for threats).
+- **Valkyrie menu:** Bluetooth toggle, WiFi toggle (when the build has WiFi), **Settings** (enable/disable detector, constant vs interval BLE scan), **Threat log** (paged CSV viewer), **Threats** (per-type toggles, NVS), **Ignored devices** (ignore list UI).
+- **Ignore list (NVS):** up to 32 `(threat type, MAC)` pairs. **Randomized BLE addresses** rotate over time, so MAC-based ignores can stop matching the same physical device.
 - **Detection feedback:** at most one threat haptic pulse per scan window when something fires (stock Meshtastic-style buzzer program).
-- **Heartbeat mode:** from a threat log row you can start heartbeat mode to hunt a device: haptic, RTTTL beeps, and sprite cadence from proximity (scan pauses while active; display stays on; tap stops heartbeat). Still rough around the edges; see [Known issues](#known-issues).
+- **Heartbeat mode:** from a threat log row — continuous **BLE** passive scan on the target MAC (duplicates on), haptic, RTTTL beeps, and sprite strength from filtered RSSI / tier (EMA + hysteresis). Duty-cycle scanning pauses while heartbeat runs; display stays on; tap exits back into the Valkyrie flow. **Wi‑Fi–logged threats** (`WifiDeauth` … `WifiMultiSsid`) use the same MAC field but there is **no Wi‑Fi promiscuous heartbeat yet** — hunt is BLE-only until that is implemented (see Phase 2).
+- **Fork-local tests:** `forks/valkyrie/test/` holds small native `.cpp` harnesses (classifier, stalking state, Wi‑Fi frame helpers, heartbeat RSSI); excluded from the firmware build via `build_src_filter`. Meshtastic Unity suites live under `test/` (see `test/README.md`).
 
 ## Known issues
 
-- **Meshtastic app not getting threat “notifications.”** I’m not seeing detections show up in the stock Meshtastic companion app the way you’d expect for a phone alert, even though the fork tries to push threat events over `PRIVATE_APP` / `sendToPhone()`. Could be decoding on the app side, port handling, protobuf registration, or something else in the chain. Needs a proper pass (and may need a forked or extended client if the official app never surfaces that port the way we need).
-
-- **Heartbeat signal / tier stability.** It still jumps between weak / medium / strong more than I’d like: 15-20 dB of swing is normal in the real world and the EMA only does so much. More smoothing, hysteresis, or a different mapping from RSSI to tier would help.
-
-- **Exiting heartbeat doesn’t return to Valkyrie.** Stopping heartbeat (e.g. tap) often drops you on the **time / clock** screen instead of back into the Valkyrie flow you came from. Navigation / `menuHandler` state needs to be fixed so you land back on the right screen.
+_No blocking issues tracked here right now._ Report quirks in issues if something regresses.
 
 ## Future plans
 
@@ -86,11 +98,15 @@ Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-A cooldown period on alerts per threat+identifier to prevent spam
+**Notification cooldowns (alarm fatigue):** extend beyond today’s scan-window dedupe / NVS-backed **`dedupeWindowSecs`** (same MAC + threat type → throttle **log + emit** within that window). Plan a separate **user-notification cooldown** keyed by **`(ThreatType, identifier)`** — e.g. minimum gap between **phone `ClientNotification`**, optional haptic, or “toast-level” repeats — so benign environments don’t spam the companion app while the threat log can stay detailed (policy TBD: align log vs notify cadence).
 
-**WiFi promiscuous-mode** threat detection (DEAUTH / EAPOL / PWNAGOTCHI / PINEAPPLE / MULTISSID / EVILPORTAL) with a cooperative scan-window radio-share design. Will live under `forks/valkyrie/modules/WifiThreatDetectorModule.{h,cpp}` with the same fork-overlay pattern. Toggle-on because it will likely cause a small hiccup in phone connectivity roughly 2-5 seconds every few minutes due to shared BLE/Wi-Fi.
+**Wi‑Fi deauth / disassoc & EAPOL false alarms:** today these are **single-frame heuristics** (management deauth/disassoc; data frames with EAPOL LLC snap). Future work: **rate limits and burst detection** (ignore one-off noise; require sustained or patterned abuse), **pair-aware context** (relate source/destination MAC and optional BSSID roles where inferable), **EAPOL sanity** (handshake phase hints vs stray encrypted garbage), and optional **SSID / privacy / channel** context so normal roaming or noisy cafés don’t look like attacks. Goal: fewer false positives without hiding real incidents.
 
-Extra logic for **AirTags** so we only warn if they appear to be **following** the user. AirTags alone are plentiful and can mean constant warnings / false positives. Better to avoid alert exhaustion. If an AirTag shows up multiple times in an interval, or GPS is enabled, we could track proximity/distance to judge a genuine stalking pattern (probably similar to how Apple/Android reason about it).
+**Wi‑Fi heartbeat:** proximity hunt for addresses seen only on the Wi‑Fi promiscuous pass (802.11 RSSI while hopping channels 1 / 6 / 11). Today heartbeat listens on **BLE** only; Wi‑Fi threat types still open **Heartbeat** from the log but won’t see frames unless that MAC also appears on BLE.
+
+**Wi‑Fi RemoteID:** on-watch **fingerprints only** today; full OpenDroneID message decode (Basic ID, GPS, operator location) and tooling integrations (e.g. mapper-style USB JSON) are not implemented here.
+
+Further **AirTag** logic: stable identity across **rotating** BLE addresses, tighter neighbour vs stalker discrimination, optional multi-window heuristics (partially overlapped with the shipped GPS stalking gate).
 
 ### Phase 3 (the UI / gamification phase)
 
@@ -114,7 +130,7 @@ A list of wishes that would require mass adoption. It would need people familiar
 
 Contribute to UI/UX to make it more responsive and improve the experience for everyone. Implement rgba with easy theme swapping. Users could upload their own art and custom color palettes.
 
-Cellular. This would allow imsi catcher/stingray detection because the watch will need/have lower level access to cell data. Plus in general it will give users the ability to use cellular without a phone.
+Cellular. This would allow imsi catcher/stingray detection because the watch will need/have lower level access to cell data. Plus in general it would give users the ability to use cellular without a phone.
 
 Separate bluetooth/wifi. This will solve the random dropping that occurs when wifi threat detection is enabled because we have to cycle wifi/bluetooth on and off to scan for wifi threats as the bluetooth and wifi module is shared.
 
@@ -133,6 +149,6 @@ it would be cool to have users opt in to sharing threats and look into building 
 BLE classification leans on patterns and prior art from several communities; I encoded the same *ideas* in NimBLE-friendly C++ on the watch:
 
 - **[ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder):** Flock-style camera naming heuristics (the same spirit as `WiFiScan::isFlockCamera`) and the Meta BLE fingerprint (`sniffbt -t meta`: manufacturer 0x01AB, service / service-data 0xFD5F).
-- **[colonel panic hacks](https://github.com/colonelpanichacks):** `flock-you` infrastructure OUI list for Flock, and **Sky-Spy**-style ASTM F3411 RemoteID over BLE (service UUID 0xFFFA) for drone presence.
+- **[colonel panic hacks](https://github.com/colonelpanichacks):** `flock-you` infrastructure OUI list for Flock, **Sky-Spy**-style ASTM F3411 RemoteID over BLE (service UUID 0xFFFA), and Wi‑Fi NAN / beacon vendor-IE fingerprints used for drone Wi‑Fi detection here (fingerprints only).
 - **Meta smart glasses:** public writeups and captures (e.g. **NullPxl / banrays**) that match the Marauder Meta filter, which we walk as proper AD records in `BleClassifier`.
 - **[AirGuard](https://github.com/seemoo-lab/AirGuard)** (Secure Mobile Networking Lab, TU Darmstadt): the **multi-sighting + location-change** idea behind our GPS-backed AirTag stalking gate, and broader awareness of how consumer trackers behave on BLE. We do not ship their code; our classifier and state machine are independent, but the *problem framing* owes a debt to their open research and app.
