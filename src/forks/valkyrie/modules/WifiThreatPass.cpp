@@ -26,20 +26,61 @@
 namespace valkyrie
 {
 
-namespace
-{
-
 struct PendingWifiThreat {
     uint8_t type_u8;
     uint8_t mac[6];
     char name[32];
     int32_t rssi;
     char detail[48];
+    uint8_t channel; // 1/6/11; 0 if unknown
 };
 
 static QueueHandle_t s_queue;
 static BleThreatDetectorModule *s_mod;
 static ValkyriePrefs s_prefs;
+
+enum class WifiPassPhase : uint8_t {
+    Idle,
+    InitDisconnectWait,
+    InitModeStaWait,
+    Scan,
+    TeardownWait,
+};
+
+/// Duty pass classifies + emits threats. Heartbeat pass filters for one MAC and reports RSSI to the module.
+enum class WifiPassMode : uint8_t {
+    Duty,
+    Heartbeat,
+};
+
+static constexpr uint32_t kDisconnectSettleMs = 10;
+static constexpr uint32_t kStaModeSettleMs = 50;
+static constexpr uint32_t kTeardownSettleMs = 20;
+static constexpr uint8_t kCh[] = {1, 6, 11};
+
+static WifiPassPhase s_phase = WifiPassPhase::Idle;
+static WifiPassMode s_mode = WifiPassMode::Duty;
+static uint32_t s_waitUntilMs = 0;
+static uint32_t s_t0 = 0;
+static uint32_t s_budgetMs = 0;
+static uint8_t s_chIdx = 0;
+static uint32_t s_hopEndMs = 0;
+/// Heartbeat-only: target MAC filter and locked channel (1/6/11; 0 = hop). Seen by promiscCb.
+static uint8_t s_hbMac[6] = {0};
+static uint8_t s_hbLockCh = 0;
+// Sticky once true: arduino-esp32's WIFI_OFF path calls esp_wifi_deinit()
+// internally, and each esp_wifi_init/deinit pair leaks ~48 bytes of
+// ESP-IDF event-handler bookkeeping. We pay the WIFI_STA init cost on the
+// first pass and then keep the *driver* alive between passes; the radio
+// itself is powered down via esp_wifi_stop() at teardown and brought back
+// up via esp_wifi_start() at the next hot-path begin to save the modem
+// idle current (~15-20 mA) without re-init'ing. The cold/hot decision is
+// formalised in WifiThreatPassPolicy.h and locked in by
+// test_wifi_threat_pass_policy/test_main.cpp.
+static bool s_wifiStaInitialised = false;
+#if HAS_SCREEN && defined(VALKYRIE_FORK)
+static uint32_t s_lastUiPumpMs = 0;
+#endif
 
 static bool qSend(const PendingWifiThreat &p)
 {
@@ -58,7 +99,7 @@ static void drainQueue(BleThreatDetectorModule *mod)
         cr.type = static_cast<ThreatType>(it.type_u8);
         strncpy(cr.detail, it.detail, sizeof(cr.detail) - 1);
         cr.detail[sizeof(cr.detail) - 1] = '\0';
-        mod->emitWifiThreat(cr, it.mac, it.name[0] ? it.name : nullptr, it.rssi);
+        mod->emitWifiThreat(cr, it.mac, it.name[0] ? it.name : nullptr, it.rssi, it.channel);
     }
 }
 
@@ -79,7 +120,7 @@ static void msisReset()
     memset(g_msis, 0, sizeof(g_msis));
 }
 
-static void msisFeed(const uint8_t bssid[6], uint16_t ssidHash, int8_t rssi)
+static void msisFeed(const uint8_t bssid[6], uint16_t ssidHash, int8_t rssi, uint8_t channel)
 {
     int idx = -1;
     for (int i = 0; i < g_msisN; ++i) {
@@ -110,6 +151,7 @@ static void msisFeed(const uint8_t bssid[6], uint16_t ssidHash, int8_t rssi)
         p.type_u8 = (uint8_t)ThreatType::WifiMultiSsid;
         memcpy(p.mac, bssid, 6);
         p.rssi = rssi;
+        p.channel = channel;
         strncpy(p.detail, "multi_ssid_beacon", sizeof(p.detail) - 1);
         qSend(p);
     }
@@ -129,6 +171,9 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     size_t frameLen = len >= 4 ? (size_t)len - 4 : 0;
     const uint8_t *frame = pkt->payload;
     int8_t rssi = (int8_t)pkt->rx_ctrl.rssi;
+    // rx_ctrl.channel is the radio's primary channel at receive time. Capture
+    // here so the OSThread tick (drainQueue) can persist it even after we've hopped.
+    uint8_t channel = (uint8_t)pkt->rx_ctrl.channel;
 
     uint8_t type = 0, subtype = 0;
     if (!wifi80211ParseFrameControl(frame, frameLen, &type, &subtype))
@@ -138,6 +183,14 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     if (!wifi80211CopyAddr123(frame, frameLen, addr1, addr2, addr3))
         return;
 
+    if (s_mode == WifiPassMode::Heartbeat) {
+        // Match either Addr2 (TX) or Addr1 (RX); APs we hunt usually appear as Addr2,
+        // but Addr1 catches frames targeted at the device when its MAC is parked there.
+        if (memcmp(addr2, s_hbMac, 6) == 0 || memcmp(addr1, s_hbMac, 6) == 0)
+            s_mod->onWifiHeartbeatFrame(s_hbMac, channel, rssi);
+        return;
+    }
+
     if (type == 0 && s_prefs.isThreatTypeEnabled(ThreatType::Drone)) {
         const bool nanHit = wifi80211MgmtRemoteIdNanSignature(frame, frameLen);
         const bool beaconIe = (subtype == 8) && wifi80211BeaconHasRemoteIdVendorIe(frame, frameLen);
@@ -146,6 +199,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             p.type_u8 = (uint8_t)ThreatType::Drone;
             memcpy(p.mac, addr2, 6);
             p.rssi = rssi;
+            p.channel = channel;
             if (nanHit)
                 strncpy(p.detail, "wifi_nan", sizeof(p.detail) - 1);
             else
@@ -165,6 +219,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             p.type_u8 = (uint8_t)ThreatType::Flock;
             memcpy(p.mac, addr2, 6);
             p.rssi = rssi;
+            p.channel = channel;
             strncpy(p.detail, "wifi_wildcard_probe", sizeof(p.detail) - 1);
             qSend(p);
         } else if (flockAddr2) {
@@ -172,6 +227,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             p.type_u8 = (uint8_t)ThreatType::Flock;
             memcpy(p.mac, addr2, 6);
             p.rssi = rssi;
+            p.channel = channel;
             strncpy(p.detail, "wifi_oui_addr2", sizeof(p.detail) - 1);
             qSend(p);
         }
@@ -182,6 +238,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             p.type_u8 = (uint8_t)ThreatType::Flock;
             memcpy(p.mac, addr1, 6);
             p.rssi = rssi;
+            p.channel = channel;
             strncpy(p.detail, "wifi_oui_addr1", sizeof(p.detail) - 1);
             qSend(p);
         }
@@ -192,6 +249,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
         p.type_u8 = (uint8_t)ThreatType::WifiDeauth;
         memcpy(p.mac, addr2, 6);
         p.rssi = rssi;
+        p.channel = channel;
         strncpy(p.detail, "deauth_or_disassoc", sizeof(p.detail) - 1);
         qSend(p);
     }
@@ -201,6 +259,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
         p.type_u8 = (uint8_t)ThreatType::WifiEapol;
         memcpy(p.mac, addr2, 6);
         p.rssi = rssi;
+        p.channel = channel;
         strncpy(p.detail, "eapol_llc", sizeof(p.detail) - 1);
         qSend(p);
     }
@@ -212,7 +271,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             wifi80211BeaconExtractSsidAndPrivacy(frame, frameLen, ssid, sizeof(ssid), &privacy);
             size_t slen = strnlen(ssid, 32);
             uint16_t h = slen == 0 ? 0xFFFF : wifi80211HashSsidBytes(reinterpret_cast<const uint8_t *>(ssid), slen);
-            msisFeed(addr2, h, rssi);
+            msisFeed(addr2, h, rssi, channel);
         }
 
         if (s_prefs.isWifiThreatTypeEnabled(ThreatType::WifiPwnagotchi) && wifi80211BeaconLooksLikePwnagotchi(frame, frameLen)) {
@@ -220,6 +279,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
             p.type_u8 = (uint8_t)ThreatType::WifiPwnagotchi;
             memcpy(p.mac, addr2, 6);
             p.rssi = rssi;
+            p.channel = channel;
             strncpy(p.detail, "beacon_json_heuristic", sizeof(p.detail) - 1);
             qSend(p);
         }
@@ -234,6 +294,7 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
                 p.type_u8 = (uint8_t)ThreatType::WifiSuspiciousAp;
                 memcpy(p.mac, addr2, 6);
                 p.rssi = rssi;
+                p.channel = channel;
                 if (vlab)
                     strncpy(p.detail, vlab, sizeof(p.detail) - 1);
                 else
@@ -245,43 +306,13 @@ static void promiscCb(void *buf, wifi_promiscuous_pkt_type_t pktType)
     }
 }
 
-enum class WifiPassPhase : uint8_t {
-    Idle,
-    InitDisconnectWait,
-    InitModeStaWait,
-    Scan,
-    TeardownWait,
-};
-
-static constexpr uint32_t kDisconnectSettleMs = 10;
-static constexpr uint32_t kStaModeSettleMs = 50;
-static constexpr uint32_t kTeardownSettleMs = 20;
-static constexpr uint8_t kCh[] = {1, 6, 11};
-
-static WifiPassPhase s_phase = WifiPassPhase::Idle;
-static uint32_t s_waitUntilMs = 0;
-static uint32_t s_t0 = 0;
-static uint32_t s_budgetMs = 0;
-static uint8_t s_chIdx = 0;
-static uint32_t s_hopEndMs = 0;
-// Sticky once true: arduino-esp32's WIFI_OFF path calls esp_wifi_deinit()
-// internally, and each esp_wifi_init/deinit pair leaks ~48 bytes of
-// ESP-IDF event-handler bookkeeping. We pay the WIFI_STA init cost on the
-// first pass and then keep the *driver* alive between passes; the radio
-// itself is powered down via esp_wifi_stop() at teardown and brought back
-// up via esp_wifi_start() at the next hot-path begin to save the modem
-// idle current (~15-20 mA) without re-init'ing. The cold/hot decision is
-// formalised in WifiThreatPassPolicy.h and locked in by
-// test_wifi_threat_pass_policy/test_main.cpp.
-static bool s_wifiStaInitialised = false;
-#if HAS_SCREEN && defined(VALKYRIE_FORK)
-static uint32_t s_lastUiPumpMs = 0;
-#endif
-
 static void resetPassMachine()
 {
     s_phase = WifiPassPhase::Idle;
+    s_mode = WifiPassMode::Duty;
     s_mod = nullptr;
+    s_hbLockCh = 0;
+    memset(s_hbMac, 0, sizeof(s_hbMac));
 }
 
 static void finishTeardownAndIdle(BleThreatDetectorModule *mod)
@@ -298,8 +329,6 @@ static void finishTeardownAndIdle(BleThreatDetectorModule *mod)
     s_waitUntilMs = millis() + kTeardownSettleMs;
     s_phase = WifiPassPhase::TeardownWait;
 }
-
-} // namespace
 
 void abortWifiThreatPass()
 {
@@ -349,6 +378,7 @@ bool beginWifiThreatPass(BleThreatDetectorModule *mod)
     }
 
     s_mod = mod;
+    s_mode = WifiPassMode::Duty;
     s_prefs = prefs;
     msisReset();
     while (uxQueueMessagesWaiting(s_queue) > 0) {
@@ -377,6 +407,60 @@ bool beginWifiThreatPass(BleThreatDetectorModule *mod)
     s_phase = (d.nextPhase == Phase::InitDisconnectWait) ? WifiPassPhase::InitDisconnectWait
                                                          : WifiPassPhase::InitModeStaWait;
     return true;
+}
+
+bool beginWifiHeartbeat(BleThreatDetectorModule *mod, const uint8_t targetMac[6], uint8_t lockChannel)
+{
+    if (!mod || !targetMac || s_phase != WifiPassPhase::Idle)
+        return false;
+
+    // Heartbeat does not require any threat-type prefs to be enabled (the user picked
+    // a specific row to hunt). It still respects the master Wi‑Fi phase toggle so a
+    // user who explicitly disabled the radio doesn't get it powered on behind their back.
+    ValkyriePrefs prefs = ValkyriePrefs::load();
+    if (!prefs.wifiThreatPhaseEnabled)
+        return false;
+
+    s_mod = mod;
+    s_mode = WifiPassMode::Heartbeat;
+    s_prefs = prefs;
+    memcpy(s_hbMac, targetMac, 6);
+    s_hbLockCh = (lockChannel == 1 || lockChannel == 6 || lockChannel == 11) ? lockChannel : 0;
+
+    using wifi_threat_pass_policy::BeginDecision;
+    using wifi_threat_pass_policy::decideBegin;
+    using wifi_threat_pass_policy::Phase;
+
+    const BeginDecision d = decideBegin(s_wifiStaInitialised);
+    if (d.needWifiDisconnect) {
+        WiFi.disconnect(false);
+        s_waitUntilMs = millis() + kDisconnectSettleMs;
+    } else {
+        esp_wifi_start();
+        s_waitUntilMs = millis() + kStaModeSettleMs;
+    }
+    s_phase = (d.nextPhase == Phase::InitDisconnectWait) ? WifiPassPhase::InitDisconnectWait
+                                                         : WifiPassPhase::InitModeStaWait;
+    LOG_INFO("Valkyrie: WiFi heartbeat starting (lock_ch=%u)", (unsigned)s_hbLockCh);
+    return true;
+}
+
+void endWifiHeartbeat()
+{
+    if (s_phase == WifiPassPhase::Idle || s_mode != WifiPassMode::Heartbeat)
+        return;
+
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    // Power the modem down but keep the driver initialised (cold/hot policy).
+    esp_wifi_stop();
+    resetPassMachine();
+    LOG_INFO("Valkyrie: WiFi heartbeat ended");
+}
+
+bool isWifiHeartbeatActive()
+{
+    return s_phase != WifiPassPhase::Idle && s_mode == WifiPassMode::Heartbeat;
 }
 
 bool tickWifiThreatPass(BleThreatDetectorModule *mod)
@@ -415,9 +499,16 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
         }
         s_t0 = now;
         s_budgetMs = s_prefs.wifiThreatPassMs;
-        s_chIdx = 0;
-        esp_wifi_set_channel(kCh[0], WIFI_SECOND_CHAN_NONE);
-        s_hopEndMs = now + s_prefs.wifiThreatChannelDwellMs;
+        if (s_mode == WifiPassMode::Heartbeat && s_hbLockCh != 0) {
+            // Lock once and skip the hop tick so RSSI updates aren't gapped by hops.
+            esp_wifi_set_channel(s_hbLockCh, WIFI_SECOND_CHAN_NONE);
+            s_chIdx = 0;
+            s_hopEndMs = (uint32_t)-1; // never hop
+        } else {
+            s_chIdx = 0;
+            esp_wifi_set_channel(kCh[0], WIFI_SECOND_CHAN_NONE);
+            s_hopEndMs = now + s_prefs.wifiThreatChannelDwellMs;
+        }
         s_phase = WifiPassPhase::Scan;
 #if HAS_SCREEN && defined(VALKYRIE_FORK)
         s_lastUiPumpMs = now;
@@ -427,18 +518,20 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
         return false;
 
     case WifiPassPhase::Scan: {
-        if (now - s_t0 >= s_budgetMs) {
+        // Heartbeat ignores the duty time budget; the OSThread will call endWifiHeartbeat() on stop.
+        if (s_mode == WifiPassMode::Duty && now - s_t0 >= s_budgetMs) {
             finishTeardownAndIdle(mod);
             return false;
         }
-        drainQueue(mod);
+        if (s_mode == WifiPassMode::Duty)
+            drainQueue(mod);
 #if HAS_SCREEN && defined(VALKYRIE_FORK)
         if (screen && now - s_lastUiPumpMs >= 50) {
             s_lastUiPumpMs = now;
             screen->repaintFrameNow();
         }
 #endif
-        if (now >= s_hopEndMs) {
+        if (s_hopEndMs != (uint32_t)-1 && now >= s_hopEndMs) {
             s_chIdx = static_cast<uint8_t>((s_chIdx + 1) % (sizeof(kCh) / sizeof(kCh[0])));
             esp_wifi_set_channel(kCh[s_chIdx], WIFI_SECOND_CHAN_NONE);
             s_hopEndMs = now + s_prefs.wifiThreatChannelDwellMs;
@@ -459,6 +552,17 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
     }
 }
 
+bool tickWifiHeartbeat(BleThreatDetectorModule *mod)
+{
+    // Heartbeat shares the duty state machine for cold/hot bring-up; the
+    // s_mode flag distinguishes Scan-phase behavior. Heartbeat never reports
+    // "complete" — endWifiHeartbeat() is the only exit.
+    if (s_phase == WifiPassPhase::Idle || s_mode != WifiPassMode::Heartbeat)
+        return false;
+    (void)tickWifiThreatPass(mod);
+    return false;
+}
+
 } // namespace valkyrie
 
 #else // !HAS_WIFI
@@ -468,6 +572,10 @@ namespace valkyrie
 bool beginWifiThreatPass(BleThreatDetectorModule *) { return false; }
 bool tickWifiThreatPass(BleThreatDetectorModule *) { return true; }
 void abortWifiThreatPass() {}
+bool beginWifiHeartbeat(BleThreatDetectorModule *, const uint8_t *, uint8_t) { return false; }
+bool tickWifiHeartbeat(BleThreatDetectorModule *) { return false; }
+void endWifiHeartbeat() {}
+bool isWifiHeartbeatActive() { return false; }
 } // namespace valkyrie
 
 #endif // HAS_WIFI

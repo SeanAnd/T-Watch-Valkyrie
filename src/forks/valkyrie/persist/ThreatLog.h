@@ -16,7 +16,10 @@ namespace valkyrie
 //   /valkyrie/threats.log    current log (rotated when it exceeds kMaxBytes)
 //   /valkyrie/threats.log.1  most recent rotation, kept as backup
 //
-// CSV columns: type,timestamp_secs,mac,name,rssi,detail  (type first for UI)
+// CSV columns (current schema): type,timestamp_secs,mac,name,rssi,detail,source,channel
+// Legacy 6-field rows (no source/channel) are still parsed; their source is
+// inferred from `type` (WifiDeauth..WifiMultiSsid -> WIFI, otherwise BLE) and
+// channel defaults to 0.
 class ThreatLog
 {
   public:
@@ -34,8 +37,10 @@ class ThreatLog
     // - name: NUL-terminated, may be empty
     // - rssi: dBm
     // - detail: NUL-terminated, may be empty
+    // - source: BLE or Wi‑Fi promiscuous origin (drives heartbeat radio choice)
+    // - channel: Wi‑Fi channel the frame arrived on (1/6/11); pass 0 for BLE rows or unknown
     static void append(uint32_t timestampSecs, const char *typeName, const uint8_t mac[6], const char *name, int32_t rssi,
-                       const char *detail);
+                       const char *detail, ThreatSource source, uint8_t channel);
 
     // Read helpers for on-device log viewer (primary file only).
     static size_t lineCount();
@@ -50,6 +55,12 @@ class ThreatLog
     // Parse leading type + MAC from a stored CSV line (supports legacy ts-first rows).
     static bool decodeIdentityFromCsvLine(const char *csvLine, ThreatType *typeOut, uint8_t macOut[6]);
 
+    // Same as decodeIdentityFromCsvLine but also returns source + channel. For legacy rows
+    // (no trailing columns), source is inferred from type (Wifi* => WIFI, else BLE) and
+    // channel is 0.
+    static bool decodeFullIdentityFromCsvLine(const char *csvLine, ThreatType *typeOut, uint8_t macOut[6],
+                                              ThreatSource *sourceOut, uint8_t *channelOut);
+
     // Delete current + rotated log files on LittleFS.
     static void clearAll();
 
@@ -57,5 +68,9 @@ class ThreatLog
     static void ensureDir();
     static void rotateIfNeeded(size_t pendingBytes);
 };
+
+// Wire token for the `source` CSV column ("BLE" / "WIFI"). Pure helper so
+// host tests can use it.
+const char *threatSourceWireName(ThreatSource s);
 
 } // namespace valkyrie

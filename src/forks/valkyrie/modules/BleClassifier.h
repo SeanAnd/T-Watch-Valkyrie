@@ -29,6 +29,14 @@ enum class ThreatType : uint8_t {
     WifiMultiSsid = 11,
 };
 
+// Which radio path observed the threat. Persisted in the threat log so the
+// heartbeat hunt can pick the right radio (and Wi‑Fi heartbeat can lock to
+// the seen channel). Wire tokens are "BLE" / "WIFI" (see ThreatLog).
+enum class ThreatSource : uint8_t {
+    Ble = 0,
+    Wifi = 1,
+};
+
 // Result of classifying a single BLE advertisement.
 struct ClassificationResult {
     ThreatType type;

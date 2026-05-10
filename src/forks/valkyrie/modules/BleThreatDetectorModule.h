@@ -67,13 +67,23 @@ class BleThreatDetectorModule : private concurrency::OSThread
     /** Reload ignore list from NVS (call after UI add/remove). */
     void reloadIgnoreList();
 
-    /** Wi‑Fi promiscuous phase: emit after classifying an 802.11 frame (respects prefs + ignore list + dedupe). */
-    void emitWifiThreat(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi);
+    /** Wi‑Fi promiscuous phase: emit after classifying an 802.11 frame (respects prefs + ignore list + dedupe).
+     *  `channel` is the receive channel (1/6/11) or 0 if unknown; persisted in the threat log so the
+     *  Wi‑Fi heartbeat hunt can lock to it. */
+    void emitWifiThreat(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi,
+                        uint8_t channel);
 
-    /** Proximity “heartbeat” listen mode for one MAC: continuous passive scan, duplicates on, no logging/phone. */
-    bool startHeartbeat(const uint8_t mac[6], ThreatType type);
+    /** Proximity “heartbeat” listen mode for one MAC. `source` selects radio path:
+     *  Ble => continuous NimBLE passive scan with duplicates on; Wifi => esp_wifi promiscuous
+     *  filtering for `mac`, optionally locked to `lockChannel` (1/6/11; 0 keeps hopping 1/6/11). */
+    bool startHeartbeat(const uint8_t mac[6], ThreatType type, ThreatSource source, uint8_t lockChannel);
     void stopHeartbeat();
     bool isHeartbeatActive() const { return heartbeatActive; }
+    ThreatSource getHeartbeatSource() const { return heartbeatSource; }
+
+    /** Called from WifiThreatPass while a Wi‑Fi heartbeat hunt is active and the
+     *  promiscuous callback sees a frame from the target MAC. Updates EMA / tier. */
+    void onWifiHeartbeatFrame(const uint8_t mac[6], uint8_t channel, int32_t rssi);
 
     HeartbeatSignalTier getHeartbeatSignalTier() const;
     int32_t getHeartbeatLastRssi() const { return heartbeatLastRssi; }
@@ -128,7 +138,8 @@ class BleThreatDetectorModule : private concurrency::OSThread
     bool tryAdmitDetection(const uint8_t mac[6], ThreatType type);
 
     void emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi,
-                       bool gpsStalkingTrigger = false, uint32_t gpsStalkingSightings = 0, uint32_t gpsStalkingPlaces = 0);
+                       ThreatSource source, uint8_t channel, bool gpsStalkingTrigger = false,
+                       uint32_t gpsStalkingSightings = 0, uint32_t gpsStalkingPlaces = 0);
 
     void appendPassThreatNotificationLine(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
                                           int32_t rssi, const char *detailBuf);
@@ -168,6 +179,8 @@ class BleThreatDetectorModule : private concurrency::OSThread
     uint32_t heartbeatSessionStartMs = 0;
     volatile bool heartbeatEverSeenTarget = false;
     ThreatType heartbeatTargetType = ThreatType::None;
+    ThreatSource heartbeatSource = ThreatSource::Ble;
+    uint8_t heartbeatLockChannel = 0;
 
     // Heartbeat RSSI: EMA + hysteresis (updated only from onAdvertisement / NimBLE path).
     volatile bool heartbeatSmoothedValid = false;

@@ -56,7 +56,9 @@ void showThreatLogEntryMenu()
 
     ThreatType t = ThreatType::None;
     uint8_t mac[6] = {0};
-    if (!ThreatLog::decodeIdentityFromCsvLine(raw, &t, mac)) {
+    ThreatSource srcLog = ThreatSource::Ble;
+    uint8_t channelLog = 0;
+    if (!ThreatLog::decodeFullIdentityFromCsvLine(raw, &t, mac, &srcLog, &channelLog)) {
         static const char *labels[] = {"Back"};
         static const int enums[] = {0};
         graphics::BannerOverlayOptions banner{};
@@ -82,8 +84,12 @@ void showThreatLogEntryMenu()
 
     static ThreatType s_typeForAdd;
     static uint8_t s_macForAdd[6];
+    static ThreatSource s_sourceForAdd;
+    static uint8_t s_channelForAdd;
     s_typeForAdd = t;
     memcpy(s_macForAdd, mac, 6);
+    s_sourceForAdd = srcLog;
+    s_channelForAdd = channelLog;
 
     graphics::BannerOverlayOptions banner{};
     banner.message = msg;
@@ -121,11 +127,11 @@ void showThreatLogEntryMenu()
                 return;
             }
             resetHeartbeatAlertUiState();
-            if (!bleThreatDetector->startHeartbeat(s_macForAdd, s_typeForAdd)) {
+            if (!bleThreatDetector->startHeartbeat(s_macForAdd, s_typeForAdd, s_sourceForAdd, s_channelForAdd)) {
                 static const char *errLabels[] = {"Back"};
                 static const int errEnums[] = {0};
                 graphics::BannerOverlayOptions err{};
-                err.message = "Bluetooth required";
+                err.message = (s_sourceForAdd == ThreatSource::Wifi) ? "Wi-Fi required" : "Bluetooth required";
                 err.optionsArrayPtr = errLabels;
                 err.optionsEnumPtr = const_cast<int *>(errEnums);
                 err.optionsCount = 1;

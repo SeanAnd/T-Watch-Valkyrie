@@ -305,6 +305,11 @@ void BleThreatDetectorModule::finalizeDutyThreatPass()
 void BleThreatDetectorModule::abortBleScanForSleep()
 {
     valkyrie::abortWifiThreatPass();
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+    // Heartbeat hunt uses the same Wi‑Fi state machine but a separate exit; clean it
+    // up too so a sleep edge doesn't leave the modem half-promiscuous.
+    valkyrie::endWifiHeartbeat();
+#endif
     wifiThreatPassActive = false;
     deferredConstantBleScanRestart = false;
     haltBleScan();
@@ -400,14 +405,18 @@ int BleThreatDetectorModule::preflightSleepCb(void *)
     return heartbeatActive ? 1 : 0;
 }
 
-bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType type)
+bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType type, ThreatSource source, uint8_t lockChannel)
 {
-    if (!nimbleBluetooth || !nimbleBluetooth->isActive())
-        return false;
-
+    // Tear any duty-cycle work down regardless of the chosen radio path: Wi‑Fi
+    // heartbeat must not run on top of an in-flight duty Wi‑Fi pass, and BLE
+    // heartbeat needs the duty BLE scan stopped to flip wantDuplicates on.
     abortBleScanForSleep();
 
+    // Reset shared heartbeat state up-front so partial init failures don't leave
+    // stale RSSI/tier visible to the UI.
     heartbeatActive = true;
+    heartbeatSource = source;
+    heartbeatLockChannel = lockChannel;
     memcpy(heartbeatTargetMac, mac, 6);
     heartbeatTargetType = type;
     heartbeatLastRssi = -128;
@@ -417,6 +426,36 @@ bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType ty
     heartbeatSmoothedValid = false;
     heartbeatSmoothedRssi = -128;
     heartbeatLatchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::None);
+
+    if (source == ThreatSource::Wifi) {
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+        if (!valkyrie::beginWifiHeartbeat(this, mac, lockChannel)) {
+            LOG_WARN("Valkyrie: WiFi heartbeat begin failed");
+            heartbeatActive = false;
+            heartbeatTargetType = ThreatType::None;
+            heartbeatSource = ThreatSource::Ble;
+            heartbeatLockChannel = 0;
+            return false;
+        }
+        scanStartedMs = millis();
+        LOG_INFO("Valkyrie: heartbeat mode started (Wi-Fi, lock_ch=%u)", (unsigned)lockChannel);
+        setIntervalFromNow(0);
+        return true;
+#else
+        LOG_WARN("Valkyrie: WiFi heartbeat unsupported on this build");
+        heartbeatActive = false;
+        heartbeatTargetType = ThreatType::None;
+        heartbeatSource = ThreatSource::Ble;
+        heartbeatLockChannel = 0;
+        return false;
+#endif
+    }
+
+    if (!nimbleBluetooth || !nimbleBluetooth->isActive()) {
+        heartbeatActive = false;
+        heartbeatTargetType = ThreatType::None;
+        return false;
+    }
 
     initScanIfNeeded();
     if (!scan || !scanInitialised) {
@@ -436,7 +475,7 @@ bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType ty
     scanActive = true;
     hapticEmittedThisScanWindow = false;
     scanStartedMs = millis();
-    LOG_INFO("Valkyrie: heartbeat mode started (target MAC)");
+    LOG_INFO("Valkyrie: heartbeat mode started (BLE)");
     setIntervalFromNow(0);
     return true;
 }
@@ -446,6 +485,8 @@ void BleThreatDetectorModule::stopHeartbeat()
     if (!heartbeatActive)
         return;
 
+    const ThreatSource src = heartbeatSource;
+
     heartbeatActive = false;
     heartbeatEverSeenTarget = false;
     heartbeatLastAdvMs = 0;
@@ -453,13 +494,46 @@ void BleThreatDetectorModule::stopHeartbeat()
     heartbeatSmoothedValid = false;
     heartbeatSmoothedRssi = -128;
     heartbeatLatchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::None);
+    heartbeatLockChannel = 0;
+    heartbeatSource = ThreatSource::Ble;
 
-    if (scan && scanInitialised) {
+    if (src == ThreatSource::Wifi) {
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+        valkyrie::endWifiHeartbeat();
+#endif
+    } else if (scan && scanInitialised) {
         haltBleScan();
         scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/false);
     }
     LOG_INFO("Valkyrie: heartbeat mode stopped");
     setIntervalFromNow(0);
+}
+
+void BleThreatDetectorModule::onWifiHeartbeatFrame(const uint8_t mac[6], uint8_t /*channel*/, int32_t rssi)
+{
+    if (!heartbeatActive || heartbeatSource != ThreatSource::Wifi)
+        return;
+    if (memcmp(mac, heartbeatTargetMac, 6) != 0)
+        return;
+
+    const uint32_t nowMs = millis();
+    const uint32_t prevAdvMs = heartbeatLastAdvMs;
+
+    heartbeatLastRssi = rssi;
+    heartbeatLastAdvMs = nowMs;
+
+    const bool gapStale = (prevAdvMs != 0) && (nowMs - prevAdvMs > kHeartbeatRssiStaleMs);
+
+    if (!heartbeatSmoothedValid || gapStale) {
+        heartbeatSmoothedRssi = heartbeatRssiEmaNext(true, 0, rssi);
+        heartbeatSmoothedValid = true;
+        heartbeatLatchedTierU8 = static_cast<uint8_t>(heartbeatRssiInstaTier(rssi));
+    } else {
+        heartbeatSmoothedRssi = heartbeatRssiEmaNext(false, heartbeatSmoothedRssi, rssi);
+        heartbeatRssiApplyHysteresis(&heartbeatLatchedTierU8, heartbeatSmoothedRssi);
+    }
+
+    heartbeatEverSeenTarget = true;
 }
 
 HeartbeatSignalTier BleThreatDetectorModule::getHeartbeatSignalTier() const
@@ -497,6 +571,17 @@ int32_t BleThreatDetectorModule::runOnce()
     static constexpr int32_t kWifiThreatPollMs = 20;
 
     if (heartbeatActive) {
+        if (heartbeatSource == ThreatSource::Wifi) {
+#if HAS_WIFI && !defined(ARCH_PORTDUINO)
+            if (!shouldScan())
+                return 30 * 1000;
+            // Drives cold/hot bring-up + Scan tick. Heartbeat never reports complete; ends via stopHeartbeat().
+            valkyrie::tickWifiHeartbeat(this);
+            return 50;
+#else
+            return 30 * 1000;
+#endif
+        }
         if (!shouldScan()) {
             return 30 * 1000;
         }
@@ -629,7 +714,7 @@ int32_t BleThreatDetectorModule::runOnce()
 // ----------------------------------------------------------------------------
 
 void BleThreatDetectorModule::emitWifiThreat(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
-                                             int32_t rssi)
+                                             int32_t rssi, uint8_t channel)
 {
     if (cls.type == ThreatType::None)
         return;
@@ -653,7 +738,7 @@ void BleThreatDetectorModule::emitWifiThreat(const ClassificationResult &cls, co
     if (!tryAdmitDetection(mac, cls.type))
         return;
 
-    emitDetection(cls, mac, name ? name : "", rssi);
+    emitDetection(cls, mac, name ? name : "", rssi, ThreatSource::Wifi, channel);
 }
 
 bool BleThreatDetectorModule::tryAdmitDetection(const uint8_t mac[6], ThreatType type)
@@ -683,8 +768,8 @@ bool BleThreatDetectorModule::tryAdmitDetection(const uint8_t mac[6], ThreatType
 }
 
 void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
-                                            int32_t rssi, bool gpsStalkingTrigger, uint32_t gpsStalkingSightings,
-                                            uint32_t gpsStalkingPlaces)
+                                            int32_t rssi, ThreatSource source, uint8_t channel, bool gpsStalkingTrigger,
+                                            uint32_t gpsStalkingSightings, uint32_t gpsStalkingPlaces)
 {
     ++totalDetections;
 
@@ -704,7 +789,7 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
     uint32_t tsSecs = millis() / 1000U;
 
     // 1. Local persistence.
-    ThreatLog::append(tsSecs, threatTypeWireName(cls.type), mac, name, rssi, detailBuf);
+    ThreatLog::append(tsSecs, threatTypeWireName(cls.type), mac, name, rssi, detailBuf, source, channel);
 
     LOG_INFO("Valkyrie: threat=%s mac=%02X:%02X:%02X:%02X:%02X:%02X rssi=%d name=\"%s\" detail=\"%s\"", threatTypeWireName(cls.type),
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)rssi, name ? name : "", detailBuf);
@@ -923,7 +1008,8 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
                 return;
             if (!tryAdmitDetection(mac, cls.type))
                 return;
-            emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), true, gr.sightings, gr.distinctPlaces);
+            emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), ThreatSource::Ble, 0, true, gr.sightings,
+                          gr.distinctPlaces);
             return;
         }
     }
@@ -931,7 +1017,7 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
     if (!tryAdmitDetection(mac, cls.type))
         return; // dedupe-throttled
 
-    emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI());
+    emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), ThreatSource::Ble, 0);
 }
 
 } // namespace valkyrie

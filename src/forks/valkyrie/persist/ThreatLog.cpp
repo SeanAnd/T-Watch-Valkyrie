@@ -6,6 +6,7 @@
 #include "../ThreatTypeUi.h"
 #include "FSCommon.h"
 #include "SPILock.h"
+#include "ThreatLogDecode.h"
 
 #include <cctype>
 #include <cerrno>
@@ -18,6 +19,17 @@
 
 namespace valkyrie
 {
+
+namespace
+{
+using threatlog_decode::decodeFullIdentity;
+using threatlog_decode::decodeIdentity;
+using threatlog_decode::extractTrailingSourceAndChannel;
+using threatlog_decode::inferSourceFromType;
+using threatlog_decode::macFieldToBytes;
+using threatlog_decode::parseThreatCsvPrefix;
+using threatlog_decode::wireTokenToThreatType;
+} // namespace
 
 // Arduino-esp32 LittleFS mounts at "/littlefs" (see LittleFS.h default basePath).
 // VFSImpl::open(..., "r") logs log_e when the path is missing; FS.exists() uses
@@ -56,67 +68,14 @@ static bool regularFileSizeQuiet(const char *fsRelative, size_t *sizeOut)
     return true;
 }
 
-static int hexValue(char c)
-{
-    if (c >= '0' && c <= '9')
-        return c - '0';
-    if (c >= 'A' && c <= 'F')
-        return 10 + c - 'A';
-    if (c >= 'a' && c <= 'f')
-        return 10 + c - 'a';
-    return -1;
-}
-
-/** Collect exactly 12 hex digits (skip :, -, .); write 6 raw bytes (MSB first, same as log CSV). */
-static bool macFieldToBytes(const char *macIn, uint8_t out[6])
-{
-    int nybbles[12];
-    int n = 0;
-    for (const char *p = macIn; *p != '\0' && n < 12; ++p) {
-        if (*p == ':' || *p == '-' || *p == '.')
-            continue;
-        int v = hexValue(*p);
-        if (v < 0)
-            continue;
-        nybbles[n++] = v;
-    }
-    if (n != 12)
-        return false;
-    for (int i = 0; i < 6; ++i)
-        out[i] = (uint8_t)((nybbles[i * 2] << 4) | nybbles[i * 2 + 1]);
-    return true;
-}
-
 /** Collect exactly 12 hex digits (skip :, -, .); emit canonical AA:BB:... uppercase */
 static bool normalizeMacForDisplay(const char *macIn, char *out, size_t outLen)
 {
-    int nybbles[12];
-    int n = 0;
-    for (const char *p = macIn; *p != '\0' && n < 12; ++p) {
-        if (*p == ':' || *p == '-' || *p == '.')
-            continue;
-        int v = hexValue(*p);
-        if (v < 0)
-            continue;
-        nybbles[n++] = v;
-    }
-    if (n != 12)
-        return false;
     uint8_t b[6];
-    for (int i = 0; i < 6; ++i)
-        b[i] = (uint8_t)((nybbles[i * 2] << 4) | nybbles[i * 2 + 1]);
+    if (!macFieldToBytes(macIn, b))
+        return false;
     snprintf(out, outLen, "%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]);
     return true;
-}
-
-static ThreatType wireTokenToThreatType(const char *tok)
-{
-    for (unsigned u = 1; u <= 11; ++u) {
-        ThreatType t = static_cast<ThreatType>((uint8_t)u);
-        if (strcmp(tok, threatTypeWireName(t)) == 0)
-            return t;
-    }
-    return ThreatType::None;
 }
 
 static void emitDisplayLine(const char *wireTypeToken, const char *macField, char *out, size_t outLen)
@@ -176,31 +135,6 @@ static void clampThreatLineForBanner(char *line, size_t lineCap, size_t maxChars
     snprintf(line, lineCap, "..%s %s", tail, macPart);
 }
 
-static void trimField(char *s)
-{
-    if (!s || !*s)
-        return;
-    char *start = s;
-    while (*start && isspace((unsigned char)*start))
-        ++start;
-    if (start != s)
-        memmove(s, start, strlen(start) + 1);
-    size_t L = strlen(s);
-    while (L > 0 && isspace((unsigned char)s[L - 1]))
-        s[--L] = '\0';
-}
-
-static bool fieldIsAllDigits(const char *f)
-{
-    if (!f || !*f)
-        return false;
-    for (const char *p = f; *p; ++p) {
-        if (!isdigit((unsigned char)*p))
-            return false;
-    }
-    return true;
-}
-
 /** Prepare untrusted text for a CSV double-quoted field: double quotes per RFC4180, strip control chars. */
 static void csvEscapeForQuotedField(const char *in, char *out, size_t outCap)
 {
@@ -226,50 +160,6 @@ static void csvEscapeForQuotedField(const char *in, char *out, size_t outCap)
         }
     }
     out[j] = '\0';
-}
-
-/**
- * Only the first three fields are needed for display. They never contain commas; remaining CSV
- * may include commas inside quoted name/detail — do not sscanf quoted fields (empty "" breaks %[^"] on some libcs).
- * New: type,ts,mac,...  Old: ts,type,mac,...
- */
-static bool parseThreatCsvPrefix(const char *line, const char **wireTypeOut, const char **macFieldOut, char *buf1, size_t n1,
-                                 char *buf2, size_t n2, char *buf3, size_t n3)
-{
-    const char *c1 = strchr(line, ',');
-    if (!c1)
-        return false;
-    const char *c2 = strchr(c1 + 1, ',');
-    if (!c2)
-        return false;
-    const char *c3 = strchr(c2 + 1, ',');
-    if (!c3)
-        return false;
-
-    size_t l1 = (size_t)(c1 - line);
-    size_t l2 = (size_t)(c2 - c1 - 1);
-    size_t l3 = (size_t)(c3 - c2 - 1);
-    if (l1 >= n1 || l2 >= n2 || l3 >= n3)
-        return false;
-
-    memcpy(buf1, line, l1);
-    buf1[l1] = '\0';
-    memcpy(buf2, c1 + 1, l2);
-    buf2[l2] = '\0';
-    memcpy(buf3, c2 + 1, l3);
-    buf3[l3] = '\0';
-    trimField(buf1);
-    trimField(buf2);
-    trimField(buf3);
-
-    if (fieldIsAllDigits(buf1)) {
-        *wireTypeOut = buf2;
-        *macFieldOut = buf3;
-    } else {
-        *wireTypeOut = buf1;
-        *macFieldOut = buf3;
-    }
-    return true;
 }
 
 // Display: "{menuLabel} {AA:BB:...}" (full CSV unchanged on disk).
@@ -445,7 +335,7 @@ void ThreatLog::rotateIfNeeded(size_t pendingBytes)
 }
 
 void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8_t mac[6], const char *name, int32_t rssi,
-                       const char *detail)
+                       const char *detail, ThreatSource source, uint8_t channel)
 {
     concurrency::LockGuard guard(spiLock);
 
@@ -464,10 +354,11 @@ void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8
 
     // Build the line up-front so we know the byte count for rotation.
     // Strings are quoted to keep CSV parseable when they contain commas.
-    char line[256];
+    char line[272];
     // type first for on-device display; ts/mac/name/rssi/detail unchanged after that.
-    int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\"\n", tn, (unsigned)timestampSecs, macStr, nameEsc,
-                     (int)rssi, detailEsc);
+    // Trailing source + channel are unquoted so the legacy decoder (first 3 fields only) keeps working.
+    int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\",%s,%u\n", tn, (unsigned)timestampSecs, macStr, nameEsc,
+                     (int)rssi, detailEsc, threatSourceWireName(source), (unsigned)channel);
     if (n < 0)
         return;
     if (n >= (int)sizeof(line))
@@ -578,20 +469,13 @@ bool ThreatLog::readViewerLine(size_t pageIndex, size_t lineOnPage, size_t maxLi
 
 bool ThreatLog::decodeIdentityFromCsvLine(const char *csvLine, ThreatType *typeOut, uint8_t macOut[6])
 {
-    if (!csvLine || !typeOut || !macOut)
-        return false;
-    char f1[48], f2[48], f3[32];
-    const char *wire = nullptr;
-    const char *mac = nullptr;
-    if (!parseThreatCsvPrefix(csvLine, &wire, &mac, f1, sizeof(f1), f2, sizeof(f2), f3, sizeof(f3)))
-        return false;
-    ThreatType t = wireTokenToThreatType(wire);
-    if (t == ThreatType::None)
-        return false;
-    if (!macFieldToBytes(mac, macOut))
-        return false;
-    *typeOut = t;
-    return true;
+    return decodeIdentity(csvLine, typeOut, macOut);
+}
+
+bool ThreatLog::decodeFullIdentityFromCsvLine(const char *csvLine, ThreatType *typeOut, uint8_t macOut[6],
+                                              ThreatSource *sourceOut, uint8_t *channelOut)
+{
+    return decodeFullIdentity(csvLine, typeOut, macOut, sourceOut, channelOut);
 }
 
 void ThreatLog::buildLineWindow(size_t pageIndex, size_t maxLines, char *outMsg, size_t outLen)
@@ -640,6 +524,17 @@ void ThreatLog::clearAll()
     unlinkIfExistsQuiet(kBackupPath);
 }
 
+const char *threatSourceWireName(ThreatSource s)
+{
+    switch (s) {
+    case ThreatSource::Wifi:
+        return "WIFI";
+    case ThreatSource::Ble:
+    default:
+        return "BLE";
+    }
+}
+
 } // namespace valkyrie
 
 #else
@@ -648,12 +543,17 @@ namespace valkyrie
 {
 void ThreatLog::ensureDir() {}
 void ThreatLog::rotateIfNeeded(size_t) {}
-void ThreatLog::append(uint32_t, const char *, const uint8_t[6], const char *, int32_t, const char *) {}
+void ThreatLog::append(uint32_t, const char *, const uint8_t[6], const char *, int32_t, const char *, ThreatSource, uint8_t) {}
 size_t ThreatLog::lineCount() { return 0; }
 void ThreatLog::buildLineWindow(size_t, size_t, char *, size_t) {}
 bool ThreatLog::readViewerLine(size_t, size_t, size_t, char *, size_t) { return false; }
 bool ThreatLog::decodeIdentityFromCsvLine(const char *, ThreatType *, uint8_t *) { return false; }
+bool ThreatLog::decodeFullIdentityFromCsvLine(const char *, ThreatType *, uint8_t *, ThreatSource *, uint8_t *) { return false; }
 void ThreatLog::clearAll() {}
+const char *threatSourceWireName(ThreatSource s)
+{
+    return s == ThreatSource::Wifi ? "WIFI" : "BLE";
+}
 } // namespace valkyrie
 
 #endif
