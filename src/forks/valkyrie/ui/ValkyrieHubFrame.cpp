@@ -5,236 +5,19 @@
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
 #include "ValkyrieFork.h"
-#include "main.h"
+#include "ValkyrieHubChibiDraw.h"
 #include "modules/BleThreatDetectorModule.h"
+#include "main.h"
+#include "persist/ThreatExperience.h"
 #include "persist/ThreatLog.h"
 #include "prefs/ValkyriePrefs.h"
-#include "../modules/HubThreatAnimTiming.h"
 #include "graphics/SharedUIDisplay.h"
-#include "sprites/idle_rgb565.h"
-#include "sprites/scan_ble_loop_rgb565.h"
-#include "sprites/scan_wifi_loop_rgb565.h"
-#include "sprites/start_ble_scan_rgb565.h"
-#include "sprites/start_wifi_scan_rgb565.h"
-#include "sprites/start_sleep_loop_rgb565.h"
-#include "sprites/start_sleep_rgb565.h"
 
+#include <cstdint>
 #include <cstdio>
 
 namespace valkyrie
 {
-
-namespace
-{
-
-constexpr unsigned kBleStartFrameCount = 6;
-constexpr unsigned kLoopFrameCount = 3;
-/// Per-frame hold for BLE start/outro clips only (loops use kFrameMsLoop).
-constexpr uint32_t kFrameMsIntro = 160;
-constexpr uint32_t kFrameMsLoop = 80;
-constexpr uint32_t kIntroTotalMs = kHubBleScanStripOutroMs;
-constexpr uint32_t kOutroTotalMs = kHubBleScanStripOutroMs;
-
-static const uint16_t *const kStartBleScanFrames[kBleStartFrameCount] = {
-    idle_rgb565,
-    startBleScan1_rgb565,
-    startBleScan2_rgb565,
-    startBleScan3_rgb565,
-    startBleScan4_rgb565,
-    startBleScan5_rgb565,
-};
-
-/// First cel of BLE and sleep intro strips (`idle_rgb565`); use for resting / unknown timeline.
-static const uint16_t *const kHubIdlePose = kStartBleScanFrames[0];
-
-static const uint16_t *const kScanBleLoopFrames[kLoopFrameCount] = {
-    scanBleLoop1_rgb565,
-    scanBleLoop2_rgb565,
-    scanBleLoop3_rgb565,
-};
-
-/// Wi‑Fi intro strip: idle pose plus five `startWifiScan*` cels (same timing as BLE scan intro).
-static const uint16_t *const kStartWifiScanFrames[kBleStartFrameCount] = {
-    kHubIdlePose,
-    startWifiScan1_rgb565,
-    startWifiScan2_rgb565,
-    startWifiScan3_rgb565,
-    startWifiScan4_rgb565,
-    startWifiScan5_rgb565,
-};
-
-static const uint16_t *const kScanWifiLoopFrames[kLoopFrameCount] = {
-    scanWifiLoop1_rgb565,
-    scanWifiLoop2_rgb565,
-    scanWifiLoop3_rgb565,
-};
-
-constexpr unsigned kSleepStartFrameCount = 6;
-constexpr unsigned kSleepLoopFrameCount = 3;
-/// Per-frame hold for sleep start / wake reverse only (loops use kFrameMsSleepLoop).
-constexpr uint32_t kFrameMsSleepIntro = 160;
-constexpr uint32_t kFrameMsSleepLoop = 80;
-constexpr uint32_t kSleepIntroTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
-constexpr uint32_t kWakeReverseTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
-
-static const uint16_t *const kStartSleepFrames[kSleepStartFrameCount] = {
-    kHubIdlePose,
-    startSleep1_rgb565,
-    startSleep2_rgb565,
-    startSleep3_rgb565,
-    startSleep4_rgb565,
-    startSleep5_rgb565,
-};
-
-static const uint16_t *const kStartSleepLoopFrames[kSleepLoopFrameCount] = {
-    startSleepLoop1_rgb565,
-    startSleepLoop2_rgb565,
-    startSleepLoop3_rgb565,
-};
-
-constexpr uint16_t kAssetW = IDLE_WIDTH;
-constexpr uint16_t kAssetH = IDLE_HEIGHT;
-/// Hub chibi drawn 150% (nearest-neighbor) so 88×88 assets occupy 132×132 on screen.
-constexpr uint16_t kDestW = kAssetW * 3 / 2;
-constexpr uint16_t kDestH = kAssetH * 3 / 2;
-
-/// TFT path uses a 1-bit buffer; map RGB565 art to lit pixels (0x0000 = transparent).
-void drawRgb565SpriteHubScaled(OLEDDisplay *display, int16_t originX, int16_t originY, const uint16_t *pixels)
-{
-    for (uint16_t drow = 0; drow < kDestH; drow++) {
-        const uint16_t srow = (uint16_t)(((uint32_t)drow * kAssetH) / kDestH);
-        for (uint16_t dcol = 0; dcol < kDestW; dcol++) {
-            const uint16_t scol = (uint16_t)(((uint32_t)dcol * kAssetW) / kDestW);
-            uint16_t p = pixels[(uint32_t)srow * kAssetW + scol];
-            if (p == 0)
-                continue;
-            uint16_t r = (p >> 11) << 3;
-            uint16_t g = ((p >> 5) & 0x3F) << 2;
-            uint16_t b = (p & 0x1F) << 3;
-            unsigned y = (r * 299U + g * 587U + b * 114U) / 1000U;
-            if (y < 28U)
-                continue;
-            display->setColor(WHITE);
-            display->setPixel(originX + (int16_t)dcol, originY + (int16_t)drow);
-        }
-    }
-}
-
-const uint16_t *pickHubChibiPixels(const BleThreatDetectorModule *det)
-{
-    if (!det)
-        return kHubIdlePose;
-
-    const uint32_t now = millis();
-
-    if (det->isScanActive()) {
-        const uint32_t tw = now - det->getScanStartedMs();
-        if (tw < kWakeReverseTotalMs) {
-            unsigned seg = (unsigned)(tw / kFrameMsSleepIntro);
-            if (seg >= kSleepStartFrameCount)
-                seg = kSleepStartFrameCount - 1;
-            const unsigned revIdx = (kSleepStartFrameCount - 1) - seg;
-            return kStartSleepFrames[revIdx];
-        }
-        const uint32_t tBle = tw - kWakeReverseTotalMs;
-        if (tBle < kIntroTotalMs) {
-            unsigned fi = (unsigned)(tBle / kFrameMsIntro);
-            if (fi >= kBleStartFrameCount)
-                fi = kBleStartFrameCount - 1;
-            return kStartBleScanFrames[fi];
-        }
-        const uint32_t t2 = tBle - kIntroTotalMs;
-        const uint32_t loopPeriod = kLoopFrameCount * kFrameMsLoop;
-        unsigned fi = (unsigned)((t2 % loopPeriod) / kFrameMsLoop);
-        if (fi >= kLoopFrameCount)
-            fi = kLoopFrameCount - 1;
-        return kScanBleLoopFrames[fi];
-    }
-
-    // Wi‑Fi promiscuous phase: BLE “start scan” reverse (end of BLE arc), then Wi‑Fi intro forward + Wi‑Fi loop.
-    if (det->isWifiThreatPassActive()) {
-        const uint32_t bleEnd = det->getHubBleWindowEndMs();
-        const uint32_t tw = bleEnd ? (now - bleEnd) : 0;
-        if (tw < kOutroTotalMs) {
-            unsigned seg = (unsigned)(tw / kFrameMsIntro);
-            if (seg >= kBleStartFrameCount)
-                seg = kBleStartFrameCount - 1;
-            const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
-            return kStartBleScanFrames[revIdx];
-        }
-        const uint32_t tAfterBleOutro = tw - kOutroTotalMs;
-        if (tAfterBleOutro < kIntroTotalMs) {
-            unsigned fi = (unsigned)(tAfterBleOutro / kFrameMsIntro);
-            if (fi >= kBleStartFrameCount)
-                fi = kBleStartFrameCount - 1;
-            return kStartWifiScanFrames[fi];
-        }
-        const uint32_t tLoop = tAfterBleOutro - kIntroTotalMs;
-        const uint32_t loopPeriod = kLoopFrameCount * kFrameMsLoop;
-        unsigned fi = (unsigned)((tLoop % loopPeriod) / kFrameMsLoop);
-        if (fi >= kLoopFrameCount)
-            fi = kLoopFrameCount - 1;
-        return kScanWifiLoopFrames[fi];
-    }
-
-    const uint32_t passEnd = det->getLastScanWindowEndMs();
-    if (passEnd == 0)
-        return kHubIdlePose;
-
-    const uint32_t te = now - passEnd;
-    const uint32_t bleEnd = det->getHubBleWindowEndMs();
-    const uint32_t passWifiSpan = (passEnd > bleEnd) ? (passEnd - bleEnd) : 0;
-    constexpr uint32_t kWifiPhaseSkipThresholdMs = 80;
-    const bool wifiPhaseRanLong = passWifiSpan > kWifiPhaseSkipThresholdMs;
-
-    if (!wifiPhaseRanLong) {
-        // Wi‑Fi skipped or negligible: original timeline — BLE outro → sleep intro → sleep loop from full-pass end.
-        if (te < kOutroTotalMs) {
-            unsigned seg = (unsigned)(te / kFrameMsIntro);
-            if (seg >= kBleStartFrameCount)
-                seg = kBleStartFrameCount - 1;
-            const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
-            return kStartBleScanFrames[revIdx];
-        }
-        const uint32_t tSleep = te - kOutroTotalMs;
-        if (tSleep < kSleepIntroTotalMs) {
-            unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);
-            if (fi >= kSleepStartFrameCount)
-                fi = kSleepStartFrameCount - 1;
-            return kStartSleepFrames[fi];
-        }
-        const uint32_t tLoop = tSleep - kSleepIntroTotalMs;
-        const uint32_t sleepLoopPeriod = kSleepLoopFrameCount * kFrameMsSleepLoop;
-        unsigned fi = (unsigned)((tLoop % sleepLoopPeriod) / kFrameMsSleepLoop);
-        if (fi >= kSleepLoopFrameCount)
-            fi = kSleepLoopFrameCount - 1;
-        return kStartSleepLoopFrames[fi];
-    }
-
-    // Wi‑Fi ran: reverse Wi‑Fi “start scan” wind-down, then sleep intro + loop (BLE / Wi‑Fi phase outros not replayed from pass end).
-    if (te < kOutroTotalMs) {
-        unsigned seg = (unsigned)(te / kFrameMsIntro);
-        if (seg >= kBleStartFrameCount)
-            seg = kBleStartFrameCount - 1;
-        const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
-        return kStartWifiScanFrames[revIdx];
-    }
-    const uint32_t tSleep = te - kOutroTotalMs;
-    if (tSleep < kSleepIntroTotalMs) {
-        unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);
-        if (fi >= kSleepStartFrameCount)
-            fi = kSleepStartFrameCount - 1;
-        return kStartSleepFrames[fi];
-    }
-    const uint32_t tLoop = tSleep - kSleepIntroTotalMs;
-    const uint32_t sleepLoopPeriod = kSleepLoopFrameCount * kFrameMsSleepLoop;
-    unsigned fi = (unsigned)((tLoop % sleepLoopPeriod) / kFrameMsSleepLoop);
-    if (fi >= kSleepLoopFrameCount)
-        fi = kSleepLoopFrameCount - 1;
-    return kStartSleepLoopFrames[fi];
-}
-
-} // namespace
 
 void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
@@ -248,20 +31,36 @@ void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, in
 
     const int *tp = graphics::getTextPositions(display);
     constexpr int16_t spritePadX = 2;
+    constexpr int16_t kHubLvlExpPadX = 4;
     // Pull chibi up slightly so the block under it clears the bottom nav strip.
     constexpr int16_t kHubSpriteNudgeUp = 16;
     int16_t spriteTop = (int16_t)tp[1] - kHubSpriteNudgeUp;
     if (spriteTop < 0)
         spriteTop = 0;
-    drawRgb565SpriteHubScaled(display, x + spritePadX, spriteTop, pickHubChibiPixels(bleThreatDetector));
+    drawHubChibi(display, x + spritePadX, spriteTop, bleThreatDetector);
+
+    const size_t threatLogLines = ThreatLog::lineCount();
+    const uint32_t threatExp = ThreatExperience::totalPoints();
+    const ThreatExperience::LevelProgress prog = ThreatExperience::levelProgress(threatExp);
+    char lvlBuf[24], expBuf[24], reqBuf[28];
+    snprintf(lvlBuf, sizeof(lvlBuf), "Lvl: %u", prog.level);
+    snprintf(expBuf, sizeof(expBuf), "Exp: %lu", (unsigned long)prog.xpTowardNext);
+    snprintf(reqBuf, sizeof(reqBuf), "Req: %lu", (unsigned long)prog.xpNeededThisLevel);
+    const int lineStepHub = tp[2] - tp[1];
+    // Keep stats below the common header — sprite uses spriteTop (nudged above tp[1]) but that
+    // overlaps the header bar; align Lvl/exp with the first body line like other frames.
+    const int16_t hubStatTop = (int16_t)tp[1];
+    const int16_t statX = (int16_t)(x + spritePadX + (int16_t)hubChibiDestWidth() + kHubLvlExpPadX);
+    display->drawString(statX, hubStatTop, lvlBuf);
+    display->drawString(statX, (int16_t)(hubStatTop + lineStepHub), expBuf);
+    display->drawString(statX, (int16_t)(hubStatTop + 2 * lineStepHub), reqBuf);
 
     ValkyriePrefs prefs = ValkyriePrefs::load();
     char line0[64], line1[64], line2[64], line3[64];
 
     snprintf(line0, sizeof(line0), "Detection: %s", prefs.bleThreatDetectorEnabled ? "On" : "Off");
     snprintf(line1, sizeof(line1), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
-    unsigned threatLines = (unsigned)ThreatLog::lineCount();
-    snprintf(line2, sizeof(line2), "Threats: %u", threatLines);
+    snprintf(line2, sizeof(line2), "Threats: %u", (unsigned)threatLogLines);
 
     if (bleThreatDetector) {
         const char *status;
@@ -289,21 +88,8 @@ void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, in
 
     const char *lines[4] = {line0, line1, line2, line3};
     const int lineStep = tp[2] - tp[1];
-    // Top-anchored block under the sprite (room for future level/exp). Avoid bottom-anchoring +
-    // minYLast — that pinned the block low and ignored footer reserve.
-    constexpr int kTextBelowSpriteGap = 4;
-    const int spriteBottom = (int)spriteTop + (int)kDestH;
-    const int yIdeal = spriteBottom + kTextBelowSpriteGap;
-    const int screenH = (int)display->getHeight();
-    // Nav bar + icon chrome (~22px) plus one text line of margin; see UIRenderer::drawNavigationBar.
-    const int bottomNavReserve =
-        (graphics::currentResolution == graphics::ScreenResolution::High) ? 52 : 34;
-    const int approxLastLineBottom = yIdeal + 3 * lineStep + lineStep;
-    const int ySafeTopMax = screenH - bottomNavReserve - 3 * lineStep - lineStep;
-    int yLine0 = yIdeal;
-    if (approxLastLineBottom > screenH - bottomNavReserve && ySafeTopMax >= spriteBottom + kTextBelowSpriteGap) {
-        yLine0 = ySafeTopMax;
-    }
+    const int16_t statusTop = hubStatusRowTextTopY(display);
+    const int yLine0 = (int)statusTop - 3 * lineStep;
     for (int j = 0; j < 4; j++) {
         display->drawString(x, (int16_t)(yLine0 + j * lineStep), lines[j]);
     }

@@ -12,6 +12,10 @@
 #include "nimble/NimbleBluetooth.h"
 #endif
 
+#if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
+#include "ui/ValkyrieDigitalClockLayout.h"
+#endif
+
 namespace graphics
 {
 
@@ -177,6 +181,10 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     char secondString[8];
     snprintf(secondString, sizeof(secondString), "%02d", second);
 
+#if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
+    valkyrie::drawValkyrieDigitalClockFace(display, x, y, timeString, secondString, config.display.use_12h_clock, isPM,
+                                          hour);
+#else
     static bool scaleInitialized = false;
     static float scale = 0.75f;
     static float segmentWidth = SEGMENT_WIDTH * 0.75f;
@@ -291,7 +299,14 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
                         secondString);
 #endif
 
+#endif // ARCH_ESP32 && VALKYRIE_FORK
+
     graphics::drawCommonFooter(display, x, y);
+
+#if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
+    // Draw after footer so the connection strip does not erase the chibi; Y uses real nav icon row.
+    valkyrie::drawValkyrieDigitalClockChibiOverlay(display, x, y);
+#endif
 }
 
 // Draw an analog clock

@@ -3,6 +3,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
+#include "ThreatExperience.h"
 #include "../ThreatTypeUi.h"
 #include "FSCommon.h"
 #include "SPILock.h"
@@ -337,65 +338,73 @@ void ThreatLog::rotateIfNeeded(size_t pendingBytes)
 void ThreatLog::append(uint32_t timestampSecs, const char *typeName, const uint8_t mac[6], const char *name, int32_t rssi,
                        const char *detail, ThreatSource source, uint8_t channel)
 {
-    concurrency::LockGuard guard(spiLock);
-
-    ensureDir();
-
-    unlinkIfExistsQuiet(kThreatLogTmpPath);
-
     const char *tn = typeName ? typeName : "?";
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    bool grantXpForDistinctRow = false;
 
-    char nameEsc[80];
-    char detailEsc[96];
-    csvEscapeForQuotedField(name ? name : "", nameEsc, sizeof(nameEsc));
-    csvEscapeForQuotedField(detail ? detail : "", detailEsc, sizeof(detailEsc));
+    {
+        concurrency::LockGuard guard(spiLock);
 
-    // Build the line up-front so we know the byte count for rotation.
-    // Strings are quoted to keep CSV parseable when they contain commas.
-    char line[272];
-    // type first for on-device display; ts/mac/name/rssi/detail unchanged after that.
-    // Trailing source + channel are unquoted so the legacy decoder (first 3 fields only) keeps working.
-    int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\",%s,%u\n", tn, (unsigned)timestampSecs, macStr, nameEsc,
-                     (int)rssi, detailEsc, threatSourceWireName(source), (unsigned)channel);
-    if (n < 0)
-        return;
-    if (n >= (int)sizeof(line))
-        n = sizeof(line) - 1;
+        ensureDir();
 
-    const bool hadDup = logFileHasDuplicateIdentity(tn, mac);
+        unlinkIfExistsQuiet(kThreatLogTmpPath);
 
-    if (hadDup) {
-        if (!rewriteThreatLogReplacingIdentity(reinterpret_cast<const uint8_t *>(line), (size_t)n, tn, mac)) {
-            LOG_WARN("Valkyrie: threat log upsert rewrite failed; appending line anyway");
-            rotateIfNeeded((size_t)n);
-            auto file = FSCom.open(kPath, FILE_APPEND);
-            if (!file) {
-                LOG_WARN("Valkyrie: failed to open %s for append", kPath);
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        char nameEsc[80];
+        char detailEsc[96];
+        csvEscapeForQuotedField(name ? name : "", nameEsc, sizeof(nameEsc));
+        csvEscapeForQuotedField(detail ? detail : "", detailEsc, sizeof(detailEsc));
+
+        // Build the line up-front so we know the byte count for rotation.
+        // Strings are quoted to keep CSV parseable when they contain commas.
+        char line[272];
+        // type first for on-device display; ts/mac/name/rssi/detail unchanged after that.
+        // Trailing source + channel are unquoted so the legacy decoder (first 3 fields only) keeps working.
+        int n = snprintf(line, sizeof(line), "%s,%u,%s,\"%s\",%d,\"%s\",%s,%u\n", tn, (unsigned)timestampSecs, macStr, nameEsc,
+                         (int)rssi, detailEsc, threatSourceWireName(source), (unsigned)channel);
+        if (n < 0)
+            return;
+        if (n >= (int)sizeof(line))
+            n = sizeof(line) - 1;
+
+        const bool hadDup = logFileHasDuplicateIdentity(tn, mac);
+
+        if (hadDup) {
+            if (!rewriteThreatLogReplacingIdentity(reinterpret_cast<const uint8_t *>(line), (size_t)n, tn, mac)) {
+                LOG_WARN("Valkyrie: threat log upsert rewrite failed; appending line anyway");
+                rotateIfNeeded((size_t)n);
+                auto file = FSCom.open(kPath, FILE_APPEND);
+                if (!file) {
+                    LOG_WARN("Valkyrie: failed to open %s for append", kPath);
+                    return;
+                }
+                file.write(reinterpret_cast<const uint8_t *>(line), n);
+                file.close();
                 return;
             }
-            file.write(reinterpret_cast<const uint8_t *>(line), n);
-            file.close();
+            rotateIfNeeded(0);
             return;
         }
-        rotateIfNeeded(0);
-        return;
+
+        rotateIfNeeded((size_t)n);
+
+        // LittleFS on ESP32 uses Arduino's fs API; FILE_APPEND ("a") is the
+        // documented append mode. FSCommon.h only defines FILE_O_WRITE
+        // ("w" — truncates) and FILE_O_READ, so we go through FILE_APPEND
+        // directly here, the same pattern RangeTestModule uses.
+        auto file = FSCom.open(kPath, FILE_APPEND);
+        if (!file) {
+            LOG_WARN("Valkyrie: failed to open %s for append", kPath);
+            return;
+        }
+        file.write(reinterpret_cast<const uint8_t *>(line), n);
+        file.close();
+        grantXpForDistinctRow = true;
     }
 
-    rotateIfNeeded((size_t)n);
-
-    // LittleFS on ESP32 uses Arduino's fs API; FILE_APPEND ("a") is the
-    // documented append mode. FSCommon.h only defines FILE_O_WRITE
-    // ("w" — truncates) and FILE_O_READ, so we go through FILE_APPEND
-    // directly here, the same pattern RangeTestModule uses.
-    auto file = FSCom.open(kPath, FILE_APPEND);
-    if (!file) {
-        LOG_WARN("Valkyrie: failed to open %s for append", kPath);
-        return;
-    }
-    file.write(reinterpret_cast<const uint8_t *>(line), n);
-    file.close();
+    if (grantXpForDistinctRow)
+        ThreatExperience::onDistinctThreatLogged(tn);
 }
 
 size_t ThreatLog::lineCount()
@@ -517,11 +526,14 @@ void ThreatLog::buildLineWindow(size_t pageIndex, size_t maxLines, char *outMsg,
 
 void ThreatLog::clearAll()
 {
-    concurrency::LockGuard guard(spiLock);
-    ensureDir();
-    unlinkIfExistsQuiet(kThreatLogTmpPath);
-    unlinkIfExistsQuiet(kPath);
-    unlinkIfExistsQuiet(kBackupPath);
+    {
+        concurrency::LockGuard guard(spiLock);
+        ensureDir();
+        unlinkIfExistsQuiet(kThreatLogTmpPath);
+        unlinkIfExistsQuiet(kPath);
+        unlinkIfExistsQuiet(kBackupPath);
+    }
+    ThreatExperience::onThreatLogCleared();
 }
 
 const char *threatSourceWireName(ThreatSource s)

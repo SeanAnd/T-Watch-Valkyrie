@@ -14,6 +14,7 @@ minimal and behind `#if defined(VALKYRIE_FORK)` (and the same macro plus
 | [`src/graphics/Screen.cpp`](src/graphics/Screen.cpp), [`Screen.h`](src/graphics/Screen.h) | Hub frame + long-press opens Valkyrie menu when `VALKYRIE_FORK`. |
 | [`src/graphics/draw/MenuHandler.cpp`](src/graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](src/graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK`. |
 | [`src/input/InputBroker.cpp`](src/input/InputBroker.cpp) | Heartbeat input hook when `VALKYRIE_FORK`. |
+| [`src/graphics/draw/ClockRenderer.cpp`](src/graphics/draw/ClockRenderer.cpp) | When `VALKYRIE_FORK` + `ARCH_ESP32`: digital clock delegates body layout to `forks/valkyrie/ui/ValkyrieDigitalClockLayout` (Valkyrie sprite + top time row); `#else` path unchanged. |
 | [`variants/esp32s3/t-watch-s3-valkyrie/platformio.ini`](variants/esp32s3/t-watch-s3-valkyrie/platformio.ini) | Parallel env: `-DVALKYRIE_FORK=1`, `-Isrc/forks/valkyrie`, `build_src_filter` for `forks/valkyrie/` (test subtree excluded from firmware). |
 
 Non-Valkyrie builds never define `VALKYRIE_FORK` and do not compile `src/forks/valkyrie/` (see root `platformio.ini` `arduino_base.build_src_filter`), so fork code and graphics hooks compile out.
@@ -91,7 +92,13 @@ What actually ships in this fork today.
 
 ## Known issues
 
-_No blocking issues tracked here right now._ Report quirks in issues if something regresses.
+Constant scan mode still allows light sleep mode which stops scanning and turns off bluetooth.
+
+Alerts need to be refined for airtag, deauth eapol to prevent fatigue.
+
+No cooldown on phone push notifications. Also need an option to turn off phone notifications
+
+Heartbeat indicator could use some work, maybe a 4th signal indicator to show when you are right on top of something. Shorter/weaker vibrations on weak signals too.
 
 ## Future plans
 
@@ -99,9 +106,13 @@ Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
+**More ways to exp:** Awarding exp based on meshtastic participation(passive exping) and wardriving(active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
+
 **Notification cooldowns (alarm fatigue):** extend beyond today’s scan-window dedupe / NVS-backed **`dedupeWindowSecs`** (same MAC + threat type → throttle **log + emit** within that window). Plan a separate **user-notification cooldown** keyed by **`(ThreatType, identifier)`** — e.g. minimum gap between **phone `ClientNotification`**, optional haptic, or “toast-level” repeats — so benign environments don’t spam the companion app while the threat log can stay detailed (policy TBD: align log vs notify cadence).
 
 **Wi‑Fi deauth / disassoc & EAPOL false alarms:** today these are **single-frame heuristics** (management deauth/disassoc; data frames with EAPOL LLC snap). Future work: **rate limits and burst detection** (ignore one-off noise; require sustained or patterned abuse), **pair-aware context** (relate source/destination MAC and optional BSSID roles where inferable), **EAPOL sanity** (handshake phase hints vs stray encrypted garbage), and optional **SSID / privacy / channel** context so normal roaming or noisy cafés don’t look like attacks. Goal: fewer false positives without hiding real incidents.
+
+**Threat Sensitivity setting:** A threat warning setting which contains 2 modes, normal and paranoid, defaulted to normal. Paranoid disables the alert alarm fatigue logic. Any deauth, airtag etc. logic will be considered a threat.
 
 **Wi‑Fi RemoteID:** on-watch **fingerprints only** today; full OpenDroneID message decode (Basic ID, GPS, operator location) and tooling integrations (e.g. mapper-style USB JSON) are not implemented here.
 
@@ -109,11 +120,9 @@ Further **AirTag** logic: stable identity across **rotating** BLE addresses, tig
 
 ### Phase 3 (the UI / gamification phase)
 
-Add experience dependant on the threat type detected. The rarer the threat the more experience gained just like my esp32valkyrie repo. The difficulty to level grows at a steady rate.
+Adding logic so the importance of the notifications will determine the displayed sprite. (threat detected being of the highest importance, meshtastic message notification being second, scanning states, and sleeping being least important) for the sprite on the clock screen only. That way waking the clock you can see that you have a pending notification without swapp to the valkyrie screen.
 
-Add a small chibi themed valkyrie icon on the watches time screen. The sprite will change depending on its current action, just like the Valkyrie menu changing depending on what it's doing or detected. The importance of the notifications will determine the displayed sprite. (threat detected being of the highest importance, meshtastic message notification being second, scanning states, and sleeping being least important).
-
-A Stats menu that will have the stats of current level, how many threats detected, detected threat types count, total exp, exp to the next level to valkyrie screen.
+(optional) A Stats menu (likely in the phone app) that will have the stats of current level, how many threats detected, detected threat types count, total exp, exp to the next level to valkyrie screen.
 
 (optional) Let the phone app handle historical threat logs and experience logic. I could prevent duplicate exp getting rewarded by checking threat type+mac address. The watch would then only have to handle the rolling threat logs, scanning, notifications and ignore list. The historical data could be used to calc stats(num of detected threats and their type) and exp/level would all be on the phone app and sent to the watch when updated for display. If it becomes popular, I could implement an API for the phone app to store statistics and do leaderboards etc. Could even do opt in wardriving to report possible real-time threats to other users who opt in. (it would be cool to have a level up screen in the app and watch. especially if there is an evolution mechanic)
 
@@ -135,7 +144,7 @@ Separate bluetooth/wifi. This will solve the random dropping that occurs when wi
 
 physical toggle switches to turn off microphone, bluetooth, wifi, cellular, radio and GPS. Depending on how testing goes it could be placed directly on the back of the watch or under the rear cover. (maybe even on the sides but not sure how much room will be available. ease of access will be key. nobody wants to take a cover off to flip a switch but gd that's a lot of toggle switches)
 
-Waterproofing/resistance and overall just quality. I want to build something that will last and extends the functionality of your phone. Not just an expensive wrist phone that collects biometric data to sell to the highest bidder.
+Waterproofing/resistance and overall just quality.
 
 (integrate custom local llm like gemma on your phone. probably more of a phase 4 thing) This could help determine if threats are legitimate and provide user education/guidance on what they are seeing, how/why it may be dangerous and if it's worth being concerned over/how to avoid being a victim of the threat. This would help normies understand things better and possibly get them interested in cybersecurity. Some of this stuff could be solved with an info button but being able to ask questions/learn is the real magic.
 
