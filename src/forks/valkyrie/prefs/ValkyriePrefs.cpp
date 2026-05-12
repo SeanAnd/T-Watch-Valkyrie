@@ -20,6 +20,7 @@ static constexpr const char *kKeyScanMask = "scan_msk";
 static constexpr const char *kKeyConstScan = "const_scn";
 static constexpr const char *kKeyThreatHaptic = "thr_hapt";
 static constexpr const char *kKeyThreatSound = "thr_snd";
+static constexpr const char *kKeyPhoneNotif = "phn_notif";
 static constexpr const char *kKeyStalkSight = "stk_sig";
 static constexpr const char *kKeyStalkPlaces = "stk_plc";
 static constexpr const char *kKeyStalkSepM = "stk_sep";
@@ -48,6 +49,7 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.constantBleScanMode = false;
     p.threatDetectionHapticEnabled = true;
     p.threatDetectionSoundEnabled = true;
+    p.phoneNotificationsEnabled = true;
     p.stalkMinSightings = 3;
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;
@@ -84,6 +86,7 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putBool(kKeyConstScan, def.constantBleScanMode);
         prefs.putBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
         prefs.putBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
+        prefs.putBool(kKeyPhoneNotif, def.phoneNotificationsEnabled);
         prefs.putUChar(kKeyStalkSight, def.stalkMinSightings);
         prefs.putUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
         prefs.putUShort(kKeyStalkSepM, def.stalkMinSeparationM);
@@ -106,6 +109,7 @@ ValkyriePrefs ValkyriePrefs::load()
     out.constantBleScanMode = prefs.getBool(kKeyConstScan, def.constantBleScanMode);
     out.threatDetectionHapticEnabled = prefs.getBool(kKeyThreatHaptic, def.threatDetectionHapticEnabled);
     out.threatDetectionSoundEnabled = prefs.getBool(kKeyThreatSound, def.threatDetectionSoundEnabled);
+    out.phoneNotificationsEnabled = prefs.getBool(kKeyPhoneNotif, def.phoneNotificationsEnabled);
     out.stalkMinSightings = prefs.getUChar(kKeyStalkSight, def.stalkMinSightings);
     out.stalkMinDistinctPlaces = prefs.getUChar(kKeyStalkPlaces, def.stalkMinDistinctPlaces);
     out.stalkMinSeparationM = prefs.getUShort(kKeyStalkSepM, def.stalkMinSeparationM);
@@ -213,6 +217,7 @@ void ValkyriePrefs::save() const
     prefs.putBool(kKeyConstScan, constantBleScanMode);
     prefs.putBool(kKeyThreatHaptic, threatDetectionHapticEnabled);
     prefs.putBool(kKeyThreatSound, threatDetectionSoundEnabled);
+    prefs.putBool(kKeyPhoneNotif, phoneNotificationsEnabled);
     prefs.putUChar(kKeyStalkSight, stalkMinSightings);
     prefs.putUChar(kKeyStalkPlaces, stalkMinDistinctPlaces);
     prefs.putUShort(kKeyStalkSepM, stalkMinSeparationM);
@@ -244,6 +249,7 @@ ValkyriePrefs ValkyriePrefs::defaults()
     p.constantBleScanMode = false;
     p.threatDetectionHapticEnabled = true;
     p.threatDetectionSoundEnabled = true;
+    p.phoneNotificationsEnabled = true;
     p.stalkMinSightings = 3;
     p.stalkMinDistinctPlaces = 2;
     p.stalkMinSeparationM = 75;

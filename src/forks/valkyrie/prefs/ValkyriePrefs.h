@@ -40,6 +40,11 @@ struct ValkyriePrefs {
     bool threatDetectionHapticEnabled; // NVS key thr_hapt
     bool threatDetectionSoundEnabled;  // NVS key thr_snd
 
+    // Master gate for all phone-bound dispatches (sendToPhone PRIVATE_APP + sendClientNotification).
+    // When false, watch-local feedback (haptic/sound/threat log) is unaffected; only phone push is suppressed.
+    // NVS key phn_notif.
+    bool phoneNotificationsEnabled;
+
     // AirTag-only: when GPS (or fixed position) is usable, require this many
     // sightings at least this many distinct place cells before emit. NVS keys stk_*.
     uint8_t stalkMinSightings;

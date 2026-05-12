@@ -94,8 +94,6 @@ What actually ships in this fork today.
 
 Alerts need to be refined for airtag, deauth eapol to prevent fatigue.
 
-No cooldown on phone push notifications. Also need an option to turn off phone notifications
-
 Heartbeat indicator could use some work, maybe a 4th signal indicator to show when you are right on top of something. Shorter/weaker vibrations on weak signals too.
 
 ## Future plans

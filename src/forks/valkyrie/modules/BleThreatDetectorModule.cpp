@@ -782,6 +782,30 @@ bool BleThreatDetectorModule::tryAdmitDetection(const uint8_t mac[6], ThreatType
     return true;
 }
 
+bool BleThreatDetectorModule::tryAdmitPhoneNotification(const uint8_t mac[6], ThreatType type)
+{
+    uint32_t now = millis();
+
+    for (size_t i = 0; i < kPhoneCooldownCap; ++i) {
+        PhoneCooldownEntry &e = phoneCooldown[i];
+        if (e.used && e.type == type && memcmp(e.mac, mac, 6) == 0) {
+            if ((now - e.lastSentMs) < kPhoneCooldownMs) {
+                return false; // within phone-notification cooldown, suppress phone push
+            }
+            e.lastSentMs = now;
+            return true;
+        }
+    }
+
+    PhoneCooldownEntry &slot = phoneCooldown[phoneCooldownNext];
+    phoneCooldownNext = (phoneCooldownNext + 1) % kPhoneCooldownCap;
+    memcpy(slot.mac, mac, 6);
+    slot.type = type;
+    slot.lastSentMs = now;
+    slot.used = true;
+    return true;
+}
+
 void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name,
                                             int32_t rssi, ThreatSource source, uint8_t channel, bool gpsStalkingTrigger,
                                             uint32_t gpsStalkingSightings, uint32_t gpsStalkingPlaces)
@@ -825,6 +849,9 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
         return;
 
     if (heartbeatActive) {
+        if (!prefs.phoneNotificationsEnabled || !tryAdmitPhoneNotification(mac, cls.type))
+            return;
+
         valkyrie_BleThreatEvent ev = valkyrie_BleThreatEvent_init_zero;
         ev.timestamp = tsSecs;
         ev.type = toWireType(cls.type);
@@ -875,11 +902,15 @@ void BleThreatDetectorModule::emitDetection(const ClassificationResult &cls, con
     }
 
     if (passNotificationBatchOpen) {
-        appendPassThreatNotificationLine(cls, mac, name, rssi, detailBuf);
+        if (prefs.phoneNotificationsEnabled && tryAdmitPhoneNotification(mac, cls.type))
+            appendPassThreatNotificationLine(cls, mac, name, rssi, detailBuf);
         return;
     }
 
     {
+        if (!prefs.phoneNotificationsEnabled || !tryAdmitPhoneNotification(mac, cls.type))
+            return;
+
         valkyrie_BleThreatEvent ev = valkyrie_BleThreatEvent_init_zero;
         ev.timestamp = tsSecs;
         ev.type = toWireType(cls.type);

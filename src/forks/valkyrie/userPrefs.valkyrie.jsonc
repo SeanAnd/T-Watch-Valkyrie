@@ -39,6 +39,9 @@
     // passive threat detection only, HAS_I2S builds; NVS key thr_snd
     "threatDetectionSoundEnabled": true,
 
+    // gates all phone push (sendToPhone + sendClientNotification); NVS key phn_notif
+    "phoneNotificationsEnabled": true,
+
     // AirTag GPS stalking gate (NVS keys stk_sig, stk_plc, stk_sep, stk_ttl)
     "stalkMinSightings": 3,
     "stalkMinDistinctPlaces": 2,

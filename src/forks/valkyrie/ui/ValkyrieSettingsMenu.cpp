@@ -145,20 +145,22 @@ void showNotificationsMenu()
 {
     ValkyriePrefs prefs = ValkyriePrefs::load();
 
-    enum opt { OptBack, OptToggleHaptic, OptToggleSound };
+    enum opt { OptBack, OptToggleHaptic, OptToggleSound, OptTogglePhone };
     static char hapticLabel[22];
     static char soundLabel[20];
+    static char phoneLabel[20];
     snprintf(hapticLabel, sizeof(hapticLabel), "Haptic: %s", prefs.threatDetectionHapticEnabled ? "On" : "Off");
     snprintf(soundLabel, sizeof(soundLabel), "Sound: %s", prefs.threatDetectionSoundEnabled ? "On" : "Off");
+    snprintf(phoneLabel, sizeof(phoneLabel), "Phone: %s", prefs.phoneNotificationsEnabled ? "On" : "Off");
 
-    static const char *labels[] = {"Back", hapticLabel, soundLabel};
-    static int enums[] = {OptBack, OptToggleHaptic, OptToggleSound};
+    static const char *labels[] = {"Back", hapticLabel, soundLabel, phoneLabel};
+    static int enums[] = {OptBack, OptToggleHaptic, OptToggleSound, OptTogglePhone};
 
     graphics::BannerOverlayOptions bannerOptions{};
     bannerOptions.message = "Notifications";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsEnumPtr = enums;
-    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsCount = 4;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == OptBack) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieSettingsMenu;
@@ -170,6 +172,8 @@ void showNotificationsMenu()
             p.threatDetectionHapticEnabled = !p.threatDetectionHapticEnabled;
         else if (selected == OptToggleSound)
             p.threatDetectionSoundEnabled = !p.threatDetectionSoundEnabled;
+        else if (selected == OptTogglePhone)
+            p.phoneNotificationsEnabled = !p.phoneNotificationsEnabled;
         else
             return;
         p.save();
@@ -188,7 +192,7 @@ void showConstantScanEnableConfirmMenu()
     static const char *opts[] = {"No", "Yes"};
     static const int enums[] = {0, 1};
     graphics::BannerOverlayOptions b{};
-    b.message = "Enable constant BLE scan?\n\nNote: this will diminish battery life.";
+    b.message = "Enable constant scanning mode?\n\nNote: this will diminish battery life.";
     b.optionsArrayPtr = opts;
     b.optionsEnumPtr = enums;
     b.optionsCount = 2;

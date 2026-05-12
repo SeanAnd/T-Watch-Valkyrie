@@ -146,6 +146,22 @@ class BleThreatDetectorModule : private concurrency::OSThread
 
     bool tryAdmitDetection(const uint8_t mac[6], ThreatType type);
 
+    // Phone-only spam guard: gates sendToPhone / sendClientNotification per (mac, type) for kPhoneCooldownMs.
+    // Independent of `dedupe` above, so watch-local feedback (haptic/sound/threat log) keeps firing on every
+    // admitted detection. Not persisted — a reboot resets the ring (acceptable for a 5-min spam guard).
+    static constexpr size_t kPhoneCooldownCap = 64;
+    static constexpr uint32_t kPhoneCooldownMs = 5UL * 60UL * 1000UL; // 5 min
+    struct PhoneCooldownEntry {
+        uint8_t mac[6];
+        ThreatType type;
+        uint32_t lastSentMs;
+        bool used;
+    };
+    PhoneCooldownEntry phoneCooldown[kPhoneCooldownCap]{};
+    size_t phoneCooldownNext = 0;
+
+    bool tryAdmitPhoneNotification(const uint8_t mac[6], ThreatType type);
+
     void emitDetection(const ClassificationResult &cls, const uint8_t mac[6], const char *name, int32_t rssi,
                        ThreatSource source, uint8_t channel, bool gpsStalkingTrigger = false,
                        uint32_t gpsStalkingSightings = 0, uint32_t gpsStalkingPlaces = 0);
