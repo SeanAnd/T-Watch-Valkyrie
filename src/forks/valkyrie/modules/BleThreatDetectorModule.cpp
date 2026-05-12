@@ -402,7 +402,14 @@ int BleThreatDetectorModule::onDeepSleep(void *)
 
 int BleThreatDetectorModule::preflightSleepCb(void *)
 {
-    return heartbeatActive ? 1 : 0;
+    if (heartbeatActive)
+        return 1;
+    // Belt-and-braces: if the runOnce nudge ever loses the race, still
+    // refuse LS while constant scan is configured so we don't tear BT down
+    // mid-window.
+    if (prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled)
+        return 1;
+    return 0;
 }
 
 bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType type, ThreatSource source, uint8_t lockChannel)
@@ -569,6 +576,14 @@ int32_t BleThreatDetectorModule::getHeartbeatSmoothedRssi() const
 int32_t BleThreatDetectorModule::runOnce()
 {
     static constexpr int32_t kWifiThreatPollMs = 20;
+
+    // Constant BLE scan must keep BT/NimBLE alive across wait_bluetooth_secs;
+    // re-enter DARK to reset the DARK->LS timed transition. Same pattern as
+    // MQTT.cpp's EVENT_CONTACT_FROM_PHONE keep-awake.
+    if (prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled &&
+        powerFSM.getState() == &::stateDARK) {
+        powerFSM.trigger(EVENT_CONTACT_FROM_PHONE);
+    }
 
     if (heartbeatActive) {
         if (heartbeatSource == ThreatSource::Wifi) {

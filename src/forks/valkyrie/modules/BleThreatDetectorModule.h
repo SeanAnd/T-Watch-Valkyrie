@@ -91,6 +91,15 @@ class BleThreatDetectorModule : private concurrency::OSThread
     int32_t getHeartbeatSmoothedRssi() const;
     bool getHeartbeatEverSeenTarget() const { return heartbeatEverSeenTarget; }
 
+    /** True when prefs would have BLE windows chained back-to-back (no real sleep between
+     *  them). Used by the hub chibi renderer to skip wake-from-sleep / going-to-sleep frames
+     *  that don't correspond to anything actually happening. Mirrors the predicate used by
+     *  BleScanSchedule.h and the LS suppression in runOnce(). */
+    bool isConstantBleChainActive() const
+    {
+        return prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled;
+    }
+
   private:
     // OSThread hook.
     int32_t runOnce() override;

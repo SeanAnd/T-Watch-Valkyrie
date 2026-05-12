@@ -122,14 +122,19 @@ static const uint16_t *pickHubChibiPixels(const valkyrie::BleThreatDetectorModul
 
     if (det->isScanActive()) {
         const uint32_t tw = now - det->getScanStartedMs();
-        if (tw < kWakeReverseTotalMs) {
+        // Constant scan chains BLE windows directly off the previous wifi/BLE pass with no
+        // real sleep in between, so the wake-from-sleep reverse (which begins on the deep-
+        // sleep pose kStartSleepFrames[5]) would just snap a sleeping chibi onto the screen
+        // for ~1s before the BLE intro. Skip it in that mode.
+        const uint32_t wakeMs = det->isConstantBleChainActive() ? 0u : kWakeReverseTotalMs;
+        if (tw < wakeMs) {
             unsigned seg = (unsigned)(tw / kFrameMsSleepIntro);
             if (seg >= kSleepStartFrameCount)
                 seg = kSleepStartFrameCount - 1;
             const unsigned revIdx = (kSleepStartFrameCount - 1) - seg;
             return kStartSleepFrames[revIdx];
         }
-        const uint32_t tBle = tw - kWakeReverseTotalMs;
+        const uint32_t tBle = tw - wakeMs;
         if (tBle < kIntroTotalMs) {
             unsigned fi = (unsigned)(tBle / kFrameMsIntro);
             if (fi >= kBleStartFrameCount)
@@ -178,6 +183,11 @@ static const uint16_t *pickHubChibiPixels(const valkyrie::BleThreatDetectorModul
     const uint32_t passWifiSpan = (passEnd > bleEnd) ? (passEnd - bleEnd) : 0;
     constexpr uint32_t kWifiPhaseSkipThresholdMs = 80;
     const bool wifiPhaseRanLong = passWifiSpan > kWifiPhaseSkipThresholdMs;
+    // Constant scan chains the next BLE window in immediately (or, on NimBLE contention,
+    // after a short retry backoff). Either way the chibi is not actually going to sleep,
+    // so once the outro reverse has played we hold the idle pose instead of falling into
+    // the start-sleep / sleep-loop frames.
+    const bool constantChain = det->isConstantBleChainActive();
 
     if (!wifiPhaseRanLong) {
         if (te < kOutroTotalMs) {
@@ -187,6 +197,8 @@ static const uint16_t *pickHubChibiPixels(const valkyrie::BleThreatDetectorModul
             const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
             return kStartBleScanFrames[revIdx];
         }
+        if (constantChain)
+            return kHubIdlePose;
         const uint32_t tSleep = te - kOutroTotalMs;
         if (tSleep < kSleepIntroTotalMs) {
             unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);
@@ -209,6 +221,8 @@ static const uint16_t *pickHubChibiPixels(const valkyrie::BleThreatDetectorModul
         const unsigned revIdx = (kBleStartFrameCount - 1) - seg;
         return kStartWifiScanFrames[revIdx];
     }
+    if (constantChain)
+        return kHubIdlePose;
     const uint32_t tSleep = te - kOutroTotalMs;
     if (tSleep < kSleepIntroTotalMs) {
         unsigned fi = (unsigned)(tSleep / kFrameMsSleepIntro);

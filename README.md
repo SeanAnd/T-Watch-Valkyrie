@@ -92,8 +92,6 @@ What actually ships in this fork today.
 
 ## Known issues
 
-Constant scan mode still allows light sleep mode which stops scanning and turns off bluetooth.
-
 Alerts need to be refined for airtag, deauth eapol to prevent fatigue.
 
 No cooldown on phone push notifications. Also need an option to turn off phone notifications
@@ -106,7 +104,7 @@ Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-**More ways to exp:** Awarding exp based on meshtastic participation(passive exping) and wardriving(active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
+**More ways to exp:** An exp log displaying exp gained and its source. Awarding exp based on meshtastic participation(passive exping) and wardriving(active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
 
 **Notification cooldowns (alarm fatigue):** extend beyond today’s scan-window dedupe / NVS-backed **`dedupeWindowSecs`** (same MAC + threat type → throttle **log + emit** within that window). Plan a separate **user-notification cooldown** keyed by **`(ThreatType, identifier)`** — e.g. minimum gap between **phone `ClientNotification`**, optional haptic, or “toast-level” repeats — so benign environments don’t spam the companion app while the threat log can stay detailed (policy TBD: align log vs notify cadence).
 
