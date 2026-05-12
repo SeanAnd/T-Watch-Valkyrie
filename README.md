@@ -15,6 +15,7 @@ minimal and behind `#if defined(VALKYRIE_FORK)` (and the same macro plus
 | [`src/graphics/draw/MenuHandler.cpp`](src/graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](src/graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK`. |
 | [`src/input/InputBroker.cpp`](src/input/InputBroker.cpp) | Heartbeat input hook when `VALKYRIE_FORK`. |
 | [`src/graphics/draw/ClockRenderer.cpp`](src/graphics/draw/ClockRenderer.cpp) | When `VALKYRIE_FORK` + `ARCH_ESP32`: digital clock delegates body layout to `forks/valkyrie/ui/ValkyrieDigitalClockLayout` (Valkyrie sprite + top time row); `#else` path unchanged. |
+| [`src/modules/Telemetry/DeviceTelemetry.cpp`](src/modules/Telemetry/DeviceTelemetry.cpp) | `VALKYRIE_FORK` + `__has_include("forks/valkyrie/persist/MeshExperience.h")` (one-line hook at the top of `runOnce()` to credit passive mesh-participation XP on the existing 60 s telemetry tick). |
 | [`variants/esp32s3/t-watch-s3-valkyrie/platformio.ini`](variants/esp32s3/t-watch-s3-valkyrie/platformio.ini) | Parallel env: `-DVALKYRIE_FORK=1`, `-Isrc/forks/valkyrie`, `build_src_filter` for `forks/valkyrie/` (test subtree excluded from firmware). |
 
 Non-Valkyrie builds never define `VALKYRIE_FORK` and do not compile `src/forks/valkyrie/` (see root `platformio.ini` `arduino_base.build_src_filter`), so fork code and graphics hooks compile out.
@@ -96,19 +97,19 @@ Alerts need to be refined for airtag, deauth eapol to prevent fatigue.
 
 Heartbeat indicator could use some work, maybe a 4th signal indicator to show when you are right on top of something. Shorter/weaker vibrations on weak signals too.
 
+if wifi or ble scanning is off, fill in the gap with the only enabled one so we get the full 20 seconds of scanning.
+
 ## Future plans
 
 Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-**More ways to exp:** An exp log displaying exp gained and its source. Awarding exp based on meshtastic participation(passive exping) and wardriving(active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
-
-**Notification cooldowns (alarm fatigue):** extend beyond today’s scan-window dedupe / NVS-backed **`dedupeWindowSecs`** (same MAC + threat type → throttle **log + emit** within that window). Plan a separate **user-notification cooldown** keyed by **`(ThreatType, identifier)`** — e.g. minimum gap between **phone `ClientNotification`**, optional haptic, or “toast-level” repeats — so benign environments don’t spam the companion app while the threat log can stay detailed (policy TBD: align log vs notify cadence).
+**More ways to exp:** An exp log displaying exp gained and its source. Passive **mesh-participation XP** now ships: a 60 s tick (piggybacked on `DeviceTelemetryModule::runOnce()`) reads the `RadioLibInterface` + `Router` counters that already feed `LocalStats` (`txRelay` / `txRelayCanceled` / `rxGood`, with an `rxDupe` penalty), credits weighted XP for the delta, and feeds a unified hub-HUD level (threat XP + mesh XP) via `forks/valkyrie/persist/MeshExperience.{h,cpp}`. Still planned: an exp log UI showing source-tagged gains, and **wardriving** XP (active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
 
 **Wi‑Fi deauth / disassoc & EAPOL false alarms:** today these are **single-frame heuristics** (management deauth/disassoc; data frames with EAPOL LLC snap). Future work: **rate limits and burst detection** (ignore one-off noise; require sustained or patterned abuse), **pair-aware context** (relate source/destination MAC and optional BSSID roles where inferable), **EAPOL sanity** (handshake phase hints vs stray encrypted garbage), and optional **SSID / privacy / channel** context so normal roaming or noisy cafés don’t look like attacks. Goal: fewer false positives without hiding real incidents.
 
-**Threat Sensitivity setting:** A threat warning setting which contains 2 modes, normal and paranoid, defaulted to normal. Paranoid disables the alert alarm fatigue logic. Any deauth, airtag etc. logic will be considered a threat.
+**Threat Sensitivity setting:** A threat warning setting which contains 2 modes, normal and paranoid, defaulted to normal. Paranoid disables the alert alarm fatigue logic. Any deauth, airtag etc. will be considered a threat.
 
 **Wi‑Fi RemoteID:** on-watch **fingerprints only** today; full OpenDroneID message decode (Basic ID, GPS, operator location) and tooling integrations (e.g. mapper-style USB JSON) are not implemented here.
 

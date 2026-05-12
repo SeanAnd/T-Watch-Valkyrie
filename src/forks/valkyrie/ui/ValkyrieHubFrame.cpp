@@ -8,6 +8,7 @@
 #include "ValkyrieHubChibiDraw.h"
 #include "modules/BleThreatDetectorModule.h"
 #include "main.h"
+#include "persist/MeshExperience.h"
 #include "persist/ThreatExperience.h"
 #include "persist/ThreatLog.h"
 #include "prefs/ValkyriePrefs.h"
@@ -40,8 +41,8 @@ void drawHubFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, in
     drawHubChibi(display, x + spritePadX, spriteTop, bleThreatDetector);
 
     const size_t threatLogLines = ThreatLog::lineCount();
-    const uint32_t threatExp = ThreatExperience::totalPoints();
-    const ThreatExperience::LevelProgress prog = ThreatExperience::levelProgress(threatExp);
+    const uint32_t totalExp = MeshExperience::totalCombinedXp();
+    const ThreatExperience::LevelProgress prog = ThreatExperience::levelProgress(totalExp);
     char lvlBuf[24], expBuf[24], reqBuf[28];
     snprintf(lvlBuf, sizeof(lvlBuf), "Lvl: %u", prog.level);
     snprintf(expBuf, sizeof(expBuf), "Exp: %lu", (unsigned long)prog.xpTowardNext);

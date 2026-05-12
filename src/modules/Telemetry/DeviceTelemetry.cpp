@@ -15,6 +15,10 @@
 #include <OLEDDisplayUi.h>
 #include <meshUtils.h>
 
+#if defined(VALKYRIE_FORK) && __has_include("forks/valkyrie/persist/MeshExperience.h")
+#include "forks/valkyrie/persist/MeshExperience.h"
+#endif
+
 #define MAGIC_USB_BATTERY_LEVEL 101
 static constexpr uint16_t TX_HISTORY_KEY_DEVICE_TELEMETRY = 0x8001;
 
@@ -22,6 +26,9 @@ int32_t DeviceTelemetryModule::runOnce()
 {
 
     refreshUptime();
+#if defined(VALKYRIE_FORK) && __has_include("forks/valkyrie/persist/MeshExperience.h")
+    valkyrie::MeshExperience::onRadioCountersTick();
+#endif
     uint32_t lastTelemetry = transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_DEVICE_TELEMETRY) : 0;
     bool isImpoliteRole = isSensorOrRouterRole();
     if (((lastTelemetry == 0) ||
