@@ -404,12 +404,53 @@ int BleThreatDetectorModule::preflightSleepCb(void *)
 {
     if (heartbeatActive)
         return 1;
+    // Wardrive session owns the radio + must keep GPS/UI ticking; refuse LS for the same
+    // reason heartbeat / constant chain do.
+    if (wardriveActive)
+        return 1;
     // Belt-and-braces: if the runOnce nudge ever loses the race, still
     // refuse LS while constant scan is configured so we don't tear BT down
     // mid-window.
     if (prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled)
         return 1;
     return 0;
+}
+
+// ----------------------------------------------------------------------------
+// Wardrive session integration.
+//
+// Wardrive needs exclusive use of the Wi‑Fi radio (WiFi.scanNetworks runs in
+// STA mode) and must keep PowerFSM awake for the duration of the drive — same
+// constraints constant BLE scan has, plus the extra requirement that our duty
+// cycle stop firing entirely so it doesn't fight the session for the modem.
+//
+// pauseForWardrive():
+//   - Tears down any in-flight BLE scan and Wi‑Fi promiscuous pass (the existing
+//     sleep-edge path already handles both cleanly).
+//   - Sets wardriveActive so runOnce() bails out at the top until cleared.
+//   - The session OSThread starts immediately after this returns; the LS-refuse
+//     vote in preflightSleepCb + the EVENT_CONTACT_FROM_PHONE nudge in runOnce
+//     keep PowerFSM in DARK/ON.
+// resumeFromWardrive():
+//   - Clears the flag and nudges runOnce so the next duty cycle starts promptly.
+// ----------------------------------------------------------------------------
+
+void BleThreatDetectorModule::pauseForWardrive()
+{
+    if (wardriveActive)
+        return;
+    LOG_INFO("Valkyrie: pausing BLE threat detector for wardrive session");
+    abortBleScanForSleep();
+    wardriveActive = true;
+}
+
+void BleThreatDetectorModule::resumeFromWardrive()
+{
+    if (!wardriveActive)
+        return;
+    LOG_INFO("Valkyrie: resuming BLE threat detector after wardrive session");
+    wardriveActive = false;
+    setIntervalFromNow(0);
 }
 
 bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType type, ThreatSource source, uint8_t lockChannel)
@@ -577,12 +618,20 @@ int32_t BleThreatDetectorModule::runOnce()
 {
     static constexpr int32_t kWifiThreatPollMs = 20;
 
-    // Constant BLE scan must keep BT/NimBLE alive across wait_bluetooth_secs;
+    // Constant BLE scan / wardrive must keep BT/NimBLE alive across wait_bluetooth_secs;
     // re-enter DARK to reset the DARK->LS timed transition. Same pattern as
     // MQTT.cpp's EVENT_CONTACT_FROM_PHONE keep-awake.
-    if (prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled &&
-        powerFSM.getState() == &::stateDARK) {
+    const bool wantKeepAwake = wardriveActive ||
+                               (prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled);
+    if (wantKeepAwake && powerFSM.getState() == &::stateDARK) {
         powerFSM.trigger(EVENT_CONTACT_FROM_PHONE);
+    }
+
+    // While a wardrive session owns the radio, do not touch the duty cycle at all.
+    // The session OSThread handles UI / scan / GPS / log on its own timeline; we only
+    // stay alive to keep the LS-refuse vote and the keep-awake nudge above ticking.
+    if (wardriveActive) {
+        return 250;
     }
 
     if (heartbeatActive) {

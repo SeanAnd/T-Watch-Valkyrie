@@ -50,34 +50,76 @@ class GPSStatus : public Status
 
     bool getIsPowerSaving() const { return isPowerSaving; }
 
+    /// Staleness window for phone-supplied position before getHasUsablePosition() stops trusting it.
+    /// The Meshtastic phone app pushes position every few seconds; 30 s lets a couple of misses slip
+    /// without falsely claiming a fix.
+    static constexpr uint32_t kPhonePositionFreshMs = 30000;
+
+    /// True when SOMETHING usable can be returned by getLatitude/getLongitude/getAltitude:
+    ///   - on-device GPS lock (hasLock is true), OR
+    ///   - config.position.fixed_position is set and localPosition is non-zero, OR
+    ///   - localPosition is non-zero and was updated within kPhonePositionFreshMs (live phone GPS).
+    /// Narrow getHasLock() is intentionally left alone for callers that specifically want
+    /// "on-device chip happy" (e.g. MeshService::onGPSChanged copies gps->p on that signal).
+    bool getHasUsablePosition() const
+    {
+        if (hasLock)
+            return true;
+        const bool localNonZero = (localPosition.latitude_i != 0 || localPosition.longitude_i != 0);
+        if (!localNonZero)
+            return false;
+        if (config.position.fixed_position)
+            return true;
+        if (!nodeDB)
+            return false;
+        const uint32_t last = nodeDB->getLastLocalPositionUpdateMs();
+        if (last == 0)
+            return false;
+        return (millis() - last) <= kPhonePositionFreshMs;
+    }
+
     int32_t getLatitude() const
     {
         if (config.position.fixed_position) {
-            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
-            return node->position.latitude_i;
-        } else {
+            return localPosition.latitude_i;
+        }
+        if (hasLock) {
             return p.latitude_i;
         }
+        // No on-device fix and not in fixed-position mode. Fall back to a fresh phone-supplied
+        // localPosition if we have one; otherwise return whatever p has (typically zero).
+        if (getHasUsablePosition()) {
+            return localPosition.latitude_i;
+        }
+        return p.latitude_i;
     }
 
     int32_t getLongitude() const
     {
         if (config.position.fixed_position) {
-            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
-            return node->position.longitude_i;
-        } else {
+            return localPosition.longitude_i;
+        }
+        if (hasLock) {
             return p.longitude_i;
         }
+        if (getHasUsablePosition()) {
+            return localPosition.longitude_i;
+        }
+        return p.longitude_i;
     }
 
     int32_t getAltitude() const
     {
         if (config.position.fixed_position) {
-            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
-            return node->position.altitude;
-        } else {
+            return localPosition.altitude;
+        }
+        if (hasLock) {
             return p.altitude;
         }
+        if (getHasUsablePosition()) {
+            return localPosition.altitude;
+        }
+        return p.altitude;
     }
 
     uint32_t getDOP() const { return p.PDOP; }

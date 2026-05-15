@@ -52,6 +52,11 @@ struct ValkyriePrefs {
     uint16_t stalkMinSeparationM;
     uint32_t stalkEntryTtlSecs;
 
+    // Wardrive (Wi‑Fi passive scan + Wigle CSV). Session-based; not background.
+    bool wardriveRequireFix;     // skip CSV rows when getHasUsablePosition() is false. NVS key wd_req_fix
+    uint16_t wardriveScanPeriodMs; // ms between consecutive WiFi.scanNetworks bursts. NVS key wd_per_ms
+    bool wardrivePhoneNotify;    // forward threat-classifier hits during drive to phone. NVS key wd_phn
+
     // Load with defaults seeded if nothing has ever been written.
     static ValkyriePrefs load();
 

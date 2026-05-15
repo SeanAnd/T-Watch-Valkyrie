@@ -59,13 +59,18 @@ class menuHandler
 #if defined(VALKYRIE_FORK)
         ValkyrieRootMenu,
         ValkyrieThreatLogMenu,
+        ValkyrieExperienceLogMenu,
         ValkyrieThreatsMenu,
         ValkyrieSettingsMenu,
         ValkyrieNotificationsMenu,
         ValkyrieConstantScanConfirmMenu,
         ValkyrieThreatLogEntryMenu,
         ValkyrieIgnoreListMenu,
-        ValkyrieIgnoreListEntryMenu
+        ValkyrieIgnoreListEntryMenu,
+        ValkyrieWardriveMenu,
+        ValkyrieWardriveSummary,
+        ValkyrieWardriveSettingsMenu,
+        ValkyrieWardriveScanPeriodMenu
 #endif
     };
     static screenMenus menuQueue;

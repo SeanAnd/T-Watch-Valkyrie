@@ -9,31 +9,16 @@
 namespace valkyrie
 {
 
+// Delegates to GPSStatus::getHasUsablePosition(), which already considers on-device GPS lock,
+// config.position.fixed_position, and live phone-supplied localPosition (staleness-gated).
+// AirTag stalking now works on phone-only T-Watch S3 builds as a side benefit.
 bool readGeoForStalking(int32_t *latOut, int32_t *lonOut)
 {
-    if (!latOut || !lonOut)
-        return false;
-    if (!gpsStatus)
-        return false;
-
-#if HAS_GPS
-    if (config.position.fixed_position) {
-        *latOut = gpsStatus->getLatitude();
-        *lonOut = gpsStatus->getLongitude();
-        return (*latOut != 0 || *lonOut != 0);
-    }
-    if (!gpsStatus->getHasLock())
+    if (!latOut || !lonOut || !gpsStatus || !gpsStatus->getHasUsablePosition())
         return false;
     *latOut = gpsStatus->getLatitude();
     *lonOut = gpsStatus->getLongitude();
     return (*latOut != 0 || *lonOut != 0);
-#else
-    if (!config.position.fixed_position)
-        return false;
-    *latOut = gpsStatus->getLatitude();
-    *lonOut = gpsStatus->getLongitude();
-    return (*latOut != 0 || *lonOut != 0);
-#endif
 }
 
 } // namespace valkyrie

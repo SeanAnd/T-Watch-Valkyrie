@@ -7,6 +7,7 @@
 #include "ValkyrieThreatsMenu.h"
 #include "ValkyrieThreatLogMenu.h"
 #include "ValkyrieIgnoreListMenu.h"
+#include "ValkyrieExperienceLogMenu.h"
 #include "graphics/Screen.h"
 #include "graphics/draw/MenuHandler.h"
 #include "main.h"
@@ -19,7 +20,9 @@ void showRootMenu()
     enum opt {
         OptBack,
         OptThreatLog,
+        OptExperienceLog,
         OptIgnoredDevices,
+        OptWardrive,
         OptThreats,
         OptSettings,
         EnumEnd
@@ -30,8 +33,12 @@ void showRootMenu()
 
     labels[n] = "Threat log";
     enums[n++] = OptThreatLog;
+    labels[n] = "Exp log";
+    enums[n++] = OptExperienceLog;
     labels[n] = "Ignored devices";
     enums[n++] = OptIgnoredDevices;
+    labels[n] = "Wardrive";
+    enums[n++] = OptWardrive;
     labels[n] = "Threats";
     enums[n++] = OptThreats;
     labels[n] = "Settings";
@@ -47,9 +54,16 @@ void showRootMenu()
             threatLogMenuResetPage();
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieThreatLogMenu;
             screen->runNow();
+        } else if (selected == OptExperienceLog) {
+            experienceLogMenuResetPage();
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieExperienceLogMenu;
+            screen->runNow();
         } else if (selected == OptIgnoredDevices) {
             ignoreListMenuResetPage();
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieIgnoreListMenu;
+            screen->runNow();
+        } else if (selected == OptWardrive) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieWardriveMenu;
             screen->runNow();
         } else if (selected == OptThreats) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieThreatsMenu;

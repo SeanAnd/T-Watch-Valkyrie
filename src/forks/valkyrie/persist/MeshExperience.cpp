@@ -4,6 +4,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
+#include "ExperienceLog.h"
 #include "ThreatExperience.h"
 #include "mesh/RadioLibInterface.h"
 #include "mesh/Router.h"
@@ -11,6 +12,7 @@
 #include <Preferences.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
 
 namespace valkyrie
@@ -146,8 +148,21 @@ void onRadioCountersTick()
     uint64_t next = cur_total + whole;
     if (next > UINT32_MAX)
         next = UINT32_MAX;
+    const uint32_t credited = next > cur_total ? (uint32_t)(next - cur_total) : 0;
 
     persistTotal((uint32_t)next);
+    if (credited == 0)
+        return;
+
+    char detail[ExperienceLog::kDetailBytes];
+    if (dRelay > 0) {
+        snprintf(detail, sizeof(detail), "Mesh relay x%u", (unsigned)dRelay);
+    } else if (dCancel > 0) {
+        snprintf(detail, sizeof(detail), "Mesh near-relay x%u", (unsigned)dCancel);
+    } else {
+        snprintf(detail, sizeof(detail), "Mesh RX x%u", (unsigned)dRxGood);
+    }
+    ExperienceLog::record(ExperienceLog::Source::Mesh, credited, detail);
 }
 
 } // namespace MeshExperience

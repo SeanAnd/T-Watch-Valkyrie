@@ -285,11 +285,15 @@ class NodeDB
         localPosition = position;
         if (position.latitude_i != 0 || position.longitude_i != 0) {
             localPositionUpdatedSinceBoot = true;
+            lastLocalPositionUpdateMs = millis();
         }
     }
 
     bool hasValidPosition(const meshtastic_NodeInfoLite *n);
     bool hasLocalPositionSinceBoot() const { return localPositionUpdatedSinceBoot; }
+    /// millis() when localPosition last gained non-zero lat/lon (0 = never). Used by
+    /// GPSStatus::getHasUsablePosition() to gate phone-supplied position with a staleness window.
+    uint32_t getLastLocalPositionUpdateMs() const { return lastLocalPositionUpdateMs; }
 
 #if !defined(MESHTASTIC_EXCLUDE_PKI)
     bool checkLowEntropyPublicKey(const meshtastic_Config_SecurityConfig_public_key_t &keyToTest);
@@ -310,6 +314,8 @@ class NodeDB
   private:
     bool duplicateWarned = false;
     bool localPositionUpdatedSinceBoot = false;
+    /// millis() of last non-zero lat/lon write to localPosition (0 = never).
+    uint32_t lastLocalPositionUpdateMs = 0;
     uint32_t lastNodeDbSave = 0;    // when we last saved our db to flash
     uint32_t lastBackupAttempt = 0; // when we last tried a backup automatically or manually
     uint32_t lastSort = 0;          // When last sorted the nodeDB

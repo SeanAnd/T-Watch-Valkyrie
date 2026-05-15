@@ -32,10 +32,12 @@
 #include "forks/valkyrie/ui/ValkyrieRootMenu.h"
 #include "forks/valkyrie/ui/ValkyrieThreatsMenu.h"
 #include "forks/valkyrie/ui/ValkyrieThreatLogMenu.h"
+#include "forks/valkyrie/ui/ValkyrieExperienceLogMenu.h"
 #include "forks/valkyrie/ui/ValkyrieThreatLogEntryMenu.h"
 #include "forks/valkyrie/ui/ValkyrieIgnoreListMenu.h"
 #include "forks/valkyrie/ui/ValkyrieIgnoreListEntryMenu.h"
 #include "forks/valkyrie/ui/ValkyrieSettingsMenu.h"
+#include "forks/valkyrie/ui/ValkyrieWardriveMenu.h"
 #endif
 
 extern uint16_t TFT_MESH;
@@ -2820,6 +2822,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case ValkyrieThreatLogMenu:
         valkyrie::showThreatLogMenu();
         break;
+    case ValkyrieExperienceLogMenu:
+        valkyrie::showExperienceLogMenu();
+        break;
     case ValkyrieThreatsMenu:
         valkyrie::showThreatsMenu();
         break;
@@ -2840,6 +2845,18 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case ValkyrieIgnoreListEntryMenu:
         valkyrie::showIgnoreListEntryMenu();
+        break;
+    case ValkyrieWardriveMenu:
+        valkyrie::showWardriveMenu();
+        break;
+    case ValkyrieWardriveSummary:
+        valkyrie::showWardriveSummaryMenu();
+        break;
+    case ValkyrieWardriveSettingsMenu:
+        valkyrie::showWardriveSettingsMenu();
+        break;
+    case ValkyrieWardriveScanPeriodMenu:
+        valkyrie::showWardriveScanPeriodMenu();
         break;
 #endif
     }

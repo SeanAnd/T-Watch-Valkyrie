@@ -4,6 +4,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 
+#include "ExperienceLog.h"
 #include "ThreatLog.h"
 #include "ThreatLogDecode.h"
 #include "FSCommon.h"
@@ -12,6 +13,7 @@
 #include <Preferences.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 
@@ -63,6 +65,37 @@ constexpr unsigned xpForThreatType(ThreatType t)
     case ThreatType::None:
     default:
         return 8;
+    }
+}
+
+constexpr const char *xpLabelForThreatType(ThreatType t)
+{
+    switch (t) {
+    case ThreatType::Airtag:
+        return "AirTag threat";
+    case ThreatType::Flipper:
+        return "Flipper threat";
+    case ThreatType::HCSkimmer:
+        return "HC skimmer threat";
+    case ThreatType::Flock:
+        return "Flock threat";
+    case ThreatType::SmartGlasses:
+        return "Smart glasses threat";
+    case ThreatType::Drone:
+        return "Drone threat";
+    case ThreatType::WifiDeauth:
+        return "WiFi deauth threat";
+    case ThreatType::WifiEapol:
+        return "WiFi EAPOL threat";
+    case ThreatType::WifiPwnagotchi:
+        return "Pwnagotchi threat";
+    case ThreatType::WifiSuspiciousAp:
+        return "Suspicious AP threat";
+    case ThreatType::WifiMultiSsid:
+        return "Multi-SSID threat";
+    case ThreatType::None:
+    default:
+        return "Unknown threat";
     }
 }
 
@@ -184,11 +217,13 @@ void onDistinctThreatLogged(const char *threatWireTypeToken)
     uint32_t next = cur + delta;
     if (next < cur)
         next = UINT32_MAX;
+    const uint32_t credited = next - cur;
     prefs.putUInt(kKeyTotalXp, next);
     prefs.end();
 
     gCachedTotalXp.store(next, std::memory_order_relaxed);
     gCachedTotalValid.store(true, std::memory_order_release);
+    ExperienceLog::record(ExperienceLog::Source::Threat, credited, xpLabelForThreatType(t));
 }
 
 void onThreatLogCleared()
@@ -202,6 +237,39 @@ void onThreatLogCleared()
 
     gCachedTotalXp.store(0, std::memory_order_relaxed);
     gCachedTotalValid.store(true, std::memory_order_release);
+}
+
+uint32_t onWardriveSessionEnded(uint32_t distinctAps, uint32_t distanceMeters, uint32_t threatHits)
+{
+    // Cap distinct APs so a single very long drive can't outrun years of normal threat XP.
+    constexpr uint32_t kMaxDistinctAps = 256;
+    const uint32_t cappedAps = distinctAps > kMaxDistinctAps ? kMaxDistinctAps : distinctAps;
+
+    // 2 XP / distinct AP + 1 XP / 100 m + 10 XP / threat hit. All integers; one NVS write total.
+    const uint64_t delta64 = (uint64_t)cappedAps * 2ULL + (uint64_t)(distanceMeters / 100U) + (uint64_t)threatHits * 10ULL;
+    const uint32_t delta = delta64 > UINT32_MAX ? UINT32_MAX : (uint32_t)delta64;
+
+    if (delta == 0)
+        return 0;
+
+    Preferences prefs;
+    if (!prefs.begin(kNvsNamespace, /*readOnly=*/false))
+        return 0;
+    uint32_t cur = prefs.getUInt(kKeyTotalXp, 0);
+    uint32_t next = cur + delta;
+    if (next < cur)
+        next = UINT32_MAX;
+    const uint32_t credited = next - cur;
+    prefs.putUInt(kKeyTotalXp, next);
+    prefs.end();
+
+    gCachedTotalXp.store(next, std::memory_order_relaxed);
+    gCachedTotalValid.store(true, std::memory_order_release);
+    char detail[ExperienceLog::kDetailBytes];
+    snprintf(detail, sizeof(detail), "Wardrive %u AP %um %u T", (unsigned)cappedAps, (unsigned)distanceMeters,
+             (unsigned)threatHits);
+    ExperienceLog::record(ExperienceLog::Source::Wardrive, credited, detail);
+    return credited;
 }
 
 } // namespace ThreatExperience

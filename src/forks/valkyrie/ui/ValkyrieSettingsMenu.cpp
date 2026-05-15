@@ -21,7 +21,15 @@ void showSettingsMenu()
     ValkyriePrefs prefs = ValkyriePrefs::load();
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptWifiThreatPhase, OptNotifications };
+    enum opt {
+        OptBack,
+        OptToggleDetector,
+        OptConstantScan,
+        OptBleThreatPhase,
+        OptWifiThreatPhase,
+        OptNotifications,
+        OptWardrive
+    };
     static char blePhaseLabel[36];
     static char wifiPhaseLabel[38];
     snprintf(blePhaseLabel, sizeof(blePhaseLabel), "BLE threat phase: %s", prefs.bleThreatPhaseEnabled ? "On" : "Off");
@@ -33,15 +41,16 @@ void showSettingsMenu()
     static char constantScanLabel[40];
     snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
 
-    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, blePhaseLabel, wifiPhaseLabel, "Notifications"};
-    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptWifiThreatPhase,
-                        OptNotifications};
+    static const char *labels[] = {"Back",         detectorToggleLabel, constantScanLabel, blePhaseLabel,
+                                   wifiPhaseLabel, "Notifications",     "Wardrive..."};
+    static int enums[] = {OptBack,           OptToggleDetector, OptConstantScan, OptBleThreatPhase,
+                          OptWifiThreatPhase, OptNotifications,  OptWardrive};
 
     graphics::BannerOverlayOptions bannerOptions{};
     bannerOptions.message = "Valkyrie settings";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsEnumPtr = enums;
-    bannerOptions.optionsCount = 6;
+    bannerOptions.optionsCount = 7;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == OptBack) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieRootMenu;
@@ -81,11 +90,14 @@ void showSettingsMenu()
         } else if (selected == OptNotifications) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
             screen->runNow();
+        } else if (selected == OptWardrive) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieWardriveSettingsMenu;
+            screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
 #else
-    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptNotifications };
+    enum opt { OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptNotifications, OptWardrive };
     static char blePhaseLabel[36];
     snprintf(blePhaseLabel, sizeof(blePhaseLabel), "BLE threat phase: %s", prefs.bleThreatPhaseEnabled ? "On" : "Off");
 
@@ -95,14 +107,16 @@ void showSettingsMenu()
     static char constantScanLabel[40];
     snprintf(constantScanLabel, sizeof(constantScanLabel), "Scan Mode: %s", prefs.constantBleScanMode ? "Constant" : "Interval");
 
-    static const char *labels[] = {"Back", detectorToggleLabel, constantScanLabel, blePhaseLabel, "Notifications"};
-    static int enums[] = {OptBack, OptToggleDetector, OptConstantScan, OptBleThreatPhase, OptNotifications};
+    static const char *labels[] = {"Back",        detectorToggleLabel, constantScanLabel,
+                                   blePhaseLabel, "Notifications",     "Wardrive..."};
+    static int enums[] = {OptBack,           OptToggleDetector, OptConstantScan,
+                          OptBleThreatPhase, OptNotifications,  OptWardrive};
 
     graphics::BannerOverlayOptions bannerOptions{};
     bannerOptions.message = "Valkyrie settings";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsEnumPtr = enums;
-    bannerOptions.optionsCount = 5;
+    bannerOptions.optionsCount = 6;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == OptBack) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieRootMenu;
@@ -134,6 +148,9 @@ void showSettingsMenu()
             screen->showSimpleBanner("Saved.", 4000);
         } else if (selected == OptNotifications) {
             graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieNotificationsMenu;
+            screen->runNow();
+        } else if (selected == OptWardrive) {
+            graphics::menuHandler::menuQueue = graphics::menuHandler::ValkyrieWardriveSettingsMenu;
             screen->runNow();
         }
     };

@@ -33,15 +33,17 @@ bool wifi80211IsBroadcastMac(const uint8_t mac[6])
     return memcmp(mac, bcast, 6) == 0;
 }
 
-bool wifi80211IsMulticastMac(const uint8_t mac[6])
+bool wifi80211IsMulticastMac(const uint8_t mac[6]) { return mac && (mac[0] & 0x01) != 0; }
+
+bool wifi80211IsZeroMac(const uint8_t mac[6])
 {
-    return mac && (mac[0] & 0x01) != 0;
+    if (!mac)
+        return false;
+    static const uint8_t zero[6] = {0, 0, 0, 0, 0, 0};
+    return memcmp(mac, zero, 6) == 0;
 }
 
-bool wifi80211IsLocallyAdministeredMac(const uint8_t mac[6])
-{
-    return mac && (mac[0] & 0x02) != 0;
-}
+bool wifi80211IsLocallyAdministeredMac(const uint8_t mac[6]) { return mac && (mac[0] & 0x02) != 0; }
 
 bool wifi80211IsWildcardProbeRequest(const uint8_t *frame, size_t len)
 {
@@ -52,8 +54,9 @@ bool wifi80211IsWildcardProbeRequest(const uint8_t *frame, size_t len)
         return false;
     if (len < 26)
         return false;
-    // IEs start after 24-byte MAC header + 2-byte capability (Probe Req has no duration in fixed? 
-    // Standard: Mgmt MAC header 24 bytes, then IEs — no fixed fields for Probe Req.)
+    // IEs start after 24-byte MAC header + 2-byte capability (Probe Req has no
+    // duration in fixed? Standard: Mgmt MAC header 24 bytes, then IEs — no fixed
+    // fields for Probe Req.)
     size_t pos = 24;
     while (pos + 2 <= len) {
         uint8_t id = frame[pos];
@@ -79,10 +82,13 @@ static size_t wifi80211DataMacHdrLen(const uint8_t *frame, size_t len, uint8_t t
 {
     (void)type;
     size_t hdr = 24;
+    const bool toDs = (frame[1] & 0x01) != 0;
+    const bool fromDs = (frame[1] & 0x02) != 0;
+    if (toDs && fromDs)
+        hdr += 6;
     // QoS Data subtypes: 0x8, 0x9, 0xa, 0xb (lower nibble 8-11 with type 2)
-    if ((subtype & 0x08) != 0 && len >= 26)
-        hdr = 26;
-    // 4-address not handled (rare for our sniff use)
+    if ((subtype & 0x08) != 0)
+        hdr += 2;
     return hdr <= len ? hdr : 0;
 }
 
@@ -102,6 +108,114 @@ bool wifi80211DataHasEapol(const uint8_t *frame, size_t len, size_t *hdrBytesOut
     if (hdrBytesOut)
         *hdrBytesOut = hdr;
     return ok;
+}
+
+bool wifi80211DataExtractBssidStation(const uint8_t *frame, size_t len, uint8_t bssidOut[6], uint8_t stationOut[6])
+{
+    if (!bssidOut || !stationOut)
+        return false;
+
+    uint8_t t, st;
+    if (!wifi80211ParseFrameControl(frame, len, &t, &st) || t != 2)
+        return false;
+    size_t hdr = wifi80211DataMacHdrLen(frame, len, t, st);
+    if (hdr == 0)
+        return false;
+
+    uint8_t addr1[6], addr2[6], addr3[6];
+    if (!wifi80211CopyAddr123(frame, len, addr1, addr2, addr3))
+        return false;
+
+    const bool toDs = (frame[1] & 0x01) != 0;
+    const bool fromDs = (frame[1] & 0x02) != 0;
+    if (toDs && fromDs)
+        return false;
+
+    if (toDs) {
+        memcpy(bssidOut, addr1, 6);
+        memcpy(stationOut, addr2, 6);
+    } else if (fromDs) {
+        memcpy(bssidOut, addr2, 6);
+        memcpy(stationOut, addr1, 6);
+    } else {
+        memcpy(bssidOut, addr3, 6);
+        if (memcmp(addr1, addr3, 6) == 0)
+            memcpy(stationOut, addr2, 6);
+        else
+            memcpy(stationOut, addr1, 6);
+    }
+
+    if (wifi80211IsZeroMac(bssidOut) || wifi80211IsMulticastMac(bssidOut) || wifi80211IsZeroMac(stationOut) ||
+        wifi80211IsMulticastMac(stationOut))
+        return false;
+    return true;
+}
+
+bool wifi80211DataExtractEapolInfo(const uint8_t *frame, size_t len, WifiEapolInfo *infoOut)
+{
+    size_t hdr = 0;
+    if (!wifi80211DataHasEapol(frame, len, &hdr))
+        return false;
+
+    const size_t eapolOffset = hdr + 8;
+    if (len < eapolOffset + 4)
+        return false;
+
+    const uint8_t *eapol = frame + eapolOffset;
+    const uint8_t version = eapol[0];
+    const uint8_t packetType = eapol[1];
+    const uint16_t bodyLen = ((uint16_t)eapol[2] << 8) | (uint16_t)eapol[3];
+    const size_t availableBody = len - eapolOffset - 4;
+
+    if (version < 1 || version > 3)
+        return false;
+    if (bodyLen > availableBody)
+        return false;
+
+    WifiEapolInfo info{};
+    info.macHeaderBytes = hdr;
+    info.version = version;
+    info.packetType = packetType;
+    info.bodyLen = bodyLen;
+    info.phase = WifiEapolKeyPhase::None;
+
+    if (packetType == 3) {
+        if (bodyLen < 95 || availableBody < 95)
+            return false;
+        const uint8_t desc = eapol[4];
+        if (desc != 1 && desc != 2 && desc != 254)
+            return false;
+
+        const uint16_t keyInfo = ((uint16_t)eapol[5] << 8) | (uint16_t)eapol[6];
+        const bool pairwise = (keyInfo & 0x0008) != 0;
+        const bool install = (keyInfo & 0x0040) != 0;
+        const bool ack = (keyInfo & 0x0080) != 0;
+        const bool mic = (keyInfo & 0x0100) != 0;
+        const bool secure = (keyInfo & 0x0200) != 0;
+        const bool error = (keyInfo & 0x0400) != 0;
+        const bool request = (keyInfo & 0x0800) != 0;
+
+        info.isKey = true;
+        info.descriptorType = desc;
+        info.keyInfo = keyInfo;
+        info.pairwiseKey = pairwise;
+        info.phase = WifiEapolKeyPhase::OtherKey;
+
+        if (pairwise && !error && !request) {
+            if (ack && !mic)
+                info.phase = WifiEapolKeyPhase::Msg1;
+            else if (!ack && mic && !secure)
+                info.phase = WifiEapolKeyPhase::Msg2;
+            else if (ack && mic && (secure || install))
+                info.phase = WifiEapolKeyPhase::Msg3;
+            else if (!ack && mic && secure)
+                info.phase = WifiEapolKeyPhase::Msg4;
+        }
+    }
+
+    if (infoOut)
+        *infoOut = info;
+    return true;
 }
 
 bool wifi80211BeaconExtractSsidAndPrivacy(const uint8_t *frame, size_t len, char *ssidOut, size_t ssidCap,
@@ -153,12 +267,9 @@ struct SuspiciousVendor {
 };
 
 static const SuspiciousVendor kSus[] = {
-    {"Alfa", {0x00, 0xc0, 0xca}, true},
-    {"Pineapple/Orient", {0x00, 0x13, 0x37}, false},
-    {"Hak5", {0x02, 0xc0, 0xca}, false},
-    {"Hak5", {0x02, 0x13, 0x37}, false},
-    {"MediaTek*", {0x00, 0x0c, 0x43}, false},
-    {"MediaTek*", {0x00, 0x0c, 0xe7}, false},
+    {"Alfa", {0x00, 0xc0, 0xca}, true},       {"Pineapple/Orient", {0x00, 0x13, 0x37}, false},
+    {"Hak5", {0x02, 0xc0, 0xca}, false},      {"Hak5", {0x02, 0x13, 0x37}, false},
+    {"MediaTek*", {0x00, 0x0c, 0x43}, false}, {"MediaTek*", {0x00, 0x0c, 0xe7}, false},
 };
 
 } // namespace

@@ -21,6 +21,11 @@ void setupFork();
 class BleThreatDetectorModule;
 extern BleThreatDetectorModule *bleThreatDetector;
 
+class WardriveSession;
+/// Wardrive session singleton. Lazily created the first time the menu opens the session
+/// (so the OSThread isn't spun up on watches that never wardrive). Nullable.
+extern WardriveSession *wardriveSession;
+
 // Create or destroy the BLE threat detector to match `bleThreatDetectorEnabled`
 // in NVS (e.g. after the user toggles it in settings). No reboot required.
 void syncBleThreatDetectorFromPrefs();

@@ -88,12 +88,24 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
     if (!gps->getIsConnected()) {
         snprintf(textString, sizeof(textString), "No Lock");
     }
+#if defined(VALKYRIE_FORK)
+    // Valkyrie: live phone-supplied position should not display as "No Sats". When the on-device
+    // chip has no fix but localPosition is fresh, treat it as usable for the badge.
+    if (!gps->getHasUsablePosition()) {
+        snprintf(textString, sizeof(textString), "No Sats");
+    } else if (!gps->getHasLock()) {
+        snprintf(textString, sizeof(textString), "Phone");
+    } else {
+        snprintf(textString, sizeof(textString), "%u sats", gps->getNumSatellites());
+    }
+#else
     if (!gps->getHasLock()) {
         // Draw "No sats" to the right of the icon with slightly more gap
         snprintf(textString, sizeof(textString), "No Sats");
     } else {
         snprintf(textString, sizeof(textString), "%u sats", gps->getNumSatellites());
     }
+#endif
     if (currentResolution == ScreenResolution::High) {
         display->drawString(x + 18, y, textString);
     } else {
@@ -123,10 +135,18 @@ void UIRenderer::drawGpsAltitude(OLEDDisplay *display, int16_t x, int16_t y, con
     if (!gps->getIsConnected() && !config.position.fixed_position) {
         // displayLine = "No GPS Module";
         // display->drawString(x + (SCREEN_WIDTH - (display->getStringWidth(displayLine))) / 2, y, displayLine);
-    } else if (!gps->getHasLock() && !config.position.fixed_position) {
+    }
+#if defined(VALKYRIE_FORK)
+    else if (!gps->getHasUsablePosition()) {
+        // No on-device fix, no fresh phone-supplied position either.
+    }
+#else
+    else if (!gps->getHasLock() && !config.position.fixed_position) {
         // displayLine = "No GPS Lock";
         // display->drawString(x + (SCREEN_WIDTH - (display->getStringWidth(displayLine))) / 2, y, displayLine);
-    } else {
+    }
+#endif
+    else {
         geoCoord.updateCoords(int32_t(gps->getLatitude()), int32_t(gps->getLongitude()), int32_t(gps->getAltitude()));
         if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL)
             snprintf(displayLine, sizeof(displayLine), "Altitude: %.0fft", geoCoord.getAltitude() * METERS_TO_FEET);
@@ -148,12 +168,23 @@ void UIRenderer::drawGpsCoordinates(OLEDDisplay *display, int16_t x, int16_t y, 
             strcpy(displayLine, "No GPS present");
             display->drawString(x, y, displayLine);
         }
-    } else if (!gps->getHasLock() && !config.position.fixed_position) {
+    }
+#if defined(VALKYRIE_FORK)
+    else if (!gps->getHasUsablePosition()) {
         if (strcmp(mode, "line1") == 0) {
             strcpy(displayLine, "No GPS Lock");
             display->drawString(x, y, displayLine);
         }
-    } else {
+    }
+#else
+    else if (!gps->getHasLock() && !config.position.fixed_position) {
+        if (strcmp(mode, "line1") == 0) {
+            strcpy(displayLine, "No GPS Lock");
+            display->drawString(x, y, displayLine);
+        }
+    }
+#endif
+    else {
 
         geoCoord.updateCoords(int32_t(gps->getLatitude()), int32_t(gps->getLongitude()), int32_t(gps->getAltitude()));
 
@@ -1193,8 +1224,14 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
     const bool hasOwnPositionFix = (ourNode && nodeDB->hasValidPosition(ourNode));
+#if defined(VALKYRIE_FORK)
+    // Valkyrie: phone-supplied position counts as a live fix for HUD heading purposes when on-device GPS is absent.
+    const bool hasLiveGpsFix =
+        (gpsStatus && gpsStatus->getHasUsablePosition() && (gpsStatus->getLatitude() != 0 || gpsStatus->getLongitude() != 0));
+#else
     const bool hasLiveGpsFix =
         (gpsStatus && gpsStatus->getHasLock() && (gpsStatus->getLatitude() != 0 || gpsStatus->getLongitude() != 0));
+#endif
     const bool hasSensorHeading = screen->hasHeading();
     float heading = 0.0f;
     bool validHeading = false;

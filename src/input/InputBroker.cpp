@@ -7,6 +7,7 @@
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
 #include "forks/valkyrie/ui/ValkyrieHeartbeatInput.h"
+#include "forks/valkyrie/ui/ValkyrieWardriveInput.h"
 #endif
 
 #if ARCH_PORTDUINO
@@ -129,6 +130,8 @@ int InputBroker::handleInputEvent(const InputEvent *event)
 
 #if defined(ARCH_ESP32) && defined(VALKYRIE_FORK)
     if (valkyrie::handleHeartbeatScreenInput(event))
+        return 0;
+    if (valkyrie::handleWardriveScreenInput(event))
         return 0;
 #endif
 

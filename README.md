@@ -9,11 +9,12 @@ What actually ships in this fork today.
 - **AirTag + GPS stalking gate:** when `readGeoForStalking()` is true (GPS lock **or** `config.position.fixed_position`, non-zero lat/lon), **only** `ThreatType::Airtag` must meet an AirGuard-style rule before log/haptic/phone emit: at least `stalkMinSightings` (default 3) sightings and `stalkMinDistinctPlaces` (default 2) distinct ~`stalkMinSeparationM` grid cells for the same BLE MAC. Without position, AirTag uses pattern match + `dedupeWindowSecs` only. Correlation is **by MAC**; rotating addresses limit reliability. Thresholds in NVS (`stk_*`) / `userPrefs.valkyrie.jsonc`.
 - **Power-aware scheduling:** duty-cycled BLE scan window (defaults ~10 s scan every ~30 s between threat-pass starts; idle gap `max(0, scanIntervalSecs - scanWindowSecs)` in NVS). Each pass ends with the Wi‑Fi promiscuous phase when enabled, then hub timing updates. Gated on `PowerFSM` state and battery percentage; aborted on `notifyDeepSleep` / `notifyLightSleep`.
 - **Sink:** detections written to `/valkyrie/threats.log` on LittleFS (rotate at 32 KB). CSV columns: `type,timestamp_secs,mac,name,rssi,detail,source,channel` — `source` is `BLE` or `WIFI` (where the detection came from), `channel` is the Wi‑Fi channel (1/6/11) for Wi‑Fi rows or 0 for BLE; both drive heartbeat radio + lock. Legacy 6-column rows from older builds are still parsed (source inferred from type). On paired BLE, events also go to the phone as **`meshtastic_PortNum_PRIVATE_APP`** protobuf (`sendToPhone()`), plus **`ClientNotification`** bursts at pass end / immediate alerts where applicable — traffic stays off LoRa (`sendToMesh()` is not used for threats).
-- **Valkyrie menu:** Bluetooth toggle, WiFi toggle (when the build has WiFi), **Settings** (enable/disable detector, constant vs interval BLE scan), **Threat log** (paged CSV viewer), **Threats** (per-type toggles, NVS), **Ignored devices** (ignore list UI).
+- **Valkyrie menu:** Bluetooth toggle, WiFi toggle (when the build has WiFi), **Settings** (enable/disable detector, constant vs interval BLE scan), **Threat log** (paged CSV viewer), **Exp log** (most-recent XP sources), **Threats** (per-type toggles, NVS), **Ignored devices** (ignore list UI).
 - **Ignore list (NVS):** up to 32 `(threat type, MAC)` pairs. **Randomized BLE addresses** rotate over time, so MAC-based ignores can stop matching the same physical device.
 - **Detection feedback:** at most one threat haptic pulse per scan window when something fires (stock Meshtastic-style buzzer program).
 - **Heartbeat mode:** from a threat log row — continuous passive scan on the target MAC, haptic, RTTTL beeps, and sprite strength from filtered RSSI / tier (EMA + hysteresis). Duty-cycle scanning pauses while heartbeat runs; display stays on; tap exits back into the Valkyrie flow. The radio path is driven by the row's stored `source`: **BLE rows** use NimBLE continuous scan with duplicates on; **Wi‑Fi rows** drop into `esp_wifi` promiscuous and lock to the row's stored `channel` (1/6/11) for fast RSSI updates, falling back to a 1/6/11 hop when the channel is unknown (legacy rows). Both paths feed the same `HeartbeatRssiFilter` so the UI is identical.
-- **Experience & unified level (`Lvl / Exp / Req` on hub):** Two XP sources roll into one displayed level on `ValkyrieHubFrame`. **Threat XP** (`ThreatExperience`, NVS `thr_xp`): one award per distinct `(type wire token, MAC)` at `ThreatLog::append`, weighted by rarity (rarer detections like Pwnagotchi/Drone/HC‑skimmer pay more); one-time backfill from existing `threats.log` after upgrade; cleared with the threat log. **Mesh-participation XP** (`MeshExperience`, NVS `mesh_xp`, new): a 60 s tick piggybacked on `DeviceTelemetryModule::runOnce()` reads `RadioLibInterface` + `Router` counters directly and credits the delta — `txRelay` × 10, `txRelayCanceled` × 1, `rxGood` × 0.1, with a `rxDupe` × 0.5 penalty clamped non-negative per tick. Fractional XP accumulates in RAM (tenths) and only flushes to NVS when ≥ 1 whole XP has accrued (NVS-wear protection); counter regressions (reboots) silently re-baseline. Both totals share `ThreatExperience::levelProgress()`'s pure-math tier curve, so the level just climbs faster as both sources contribute. Stock builds compile out via `__has_include`.
+- **Wardrive mode (Wi‑Fi):** session-based, opened from the Valkyrie root menu. `WardriveSession` pauses the BLE+Wi‑Fi duty cycle (refuses light sleep + pumps `EVENT_CONTACT_FROM_PHONE` like constant scan mode), runs `WiFi.scanNetworks` **passive** async on all regulatory-domain channels every `wd_per_ms` ms (**default 10 s** — nicer to BLE / phone-supplied position), listens **150 ms/channel** (~1–2 s bursts, mostly RX; no probe transmits), samples position once a second via `gpsStatus->getHasUsablePosition()` (on-device GPS **or** phone-supplied `localPosition`), accumulates haversine distance (time-gated), and writes Wigle 1.6 CSV to `/valkyrie/wardrive/wardrive_<unixSecs>.csv` on LittleFS. BSSID dedup is in-session (~1024 entries). The threat classifier fires from beacon-derived scan results where applicable (Flock OUI + suspicious vendor hits → `BleThreatDetectorModule`; `wardrivePhoneNotify` gates phone push). Hidden SSIDs that never beacon may be missed vs active scan — the usual passive trade-off. fullscreen heartbeat-style frame shows `Fix: GPS|Phone|Stale|None` with **phone-coordinate age** taken from `nodeDB` (not the 1 Hz poll); dynamic phone fixes older than ~10 s render as `*Stale` and invert on OLED to flag CSV positions that are behind real time. Session end awards XP via `ThreatExperience::onWardriveSessionEnded`. FIFO-pruned old session CSVs at boot.
+- **Experience & unified level (`Lvl / Exp / Req` on hub):** Three XP sources roll into one displayed level on `ValkyrieHubFrame`. **Threat XP** (`ThreatExperience`, NVS `thr_xp`): one award per distinct `(type wire token, MAC)` at `ThreatLog::append`, weighted by rarity (rarer detections like Pwnagotchi/Drone/HC‑skimmer pay more); one-time backfill from existing `threats.log` after upgrade; cleared with the threat log. **Wardrive XP** (`ThreatExperience::onWardriveSessionEnded`): one bounded award per session from distinct BSSIDs, validated distance, and threat hits. **Mesh-participation XP** (`MeshExperience`, NVS `mesh_xp`, new): a 60 s tick piggybacked on `DeviceTelemetryModule::runOnce()` reads `RadioLibInterface` + `Router` counters directly and credits the delta — `txRelay` × 10, `txRelayCanceled` × 1, `rxGood` × 0.1, with a `rxDupe` × 0.5 penalty clamped non-negative per tick. Fractional XP accumulates in RAM (tenths) and only flushes to NVS when ≥ 1 whole XP has accrued (NVS-wear protection); counter regressions (reboots) silently re-baseline. `ExperienceLog` records the most recent 12 credited XP events in a fixed RAM ring (`Threat`, `Mesh`, `Wardrive`) and the root-menu **Exp log** displays them newest-first without heap growth or extra NVS writes. All totals share `ThreatExperience::levelProgress()`'s pure-math tier curve, so the level just climbs faster as sources contribute. Stock builds compile out via `__has_include`.
 - **Digital clock face:** When the device is on the clock screen and built with `VALKYRIE_FORK + ARCH_ESP32`, `ValkyrieDigitalClockLayout` paints a top time row plus a compact hub chibi overlay just above the bottom icon strip; non-Valkyrie builds keep the stock face unchanged via the `#else` path in `ClockRenderer.cpp`.
 - **Fork-local tests:** `forks/valkyrie/test/` holds small native `.cpp` harnesses (classifier, stalking state, Wi‑Fi frame helpers, heartbeat RSSI); excluded from the firmware build via `build_src_filter`. Meshtastic Unity suites live under `test/` (see `test/README.md`).
 
@@ -39,10 +40,13 @@ minimal and behind `#if defined(VALKYRIE_FORK)` (and the same macro plus
 |---------------|----------------|
 | [`src/modules/Modules.cpp`](src/modules/Modules.cpp) | `VALKYRIE_FORK` + `__has_include("forks/valkyrie/ValkyrieFork.h")` (include + `valkyrie::setupFork()` at end of `setupModules()`). Stock builds exclude `forks/valkyrie/` via `arduino_base.build_src_filter`. |
 | [`src/graphics/Screen.cpp`](src/graphics/Screen.cpp), [`Screen.h`](src/graphics/Screen.h) | Hub frame + long-press opens Valkyrie menu when `VALKYRIE_FORK`. |
-| [`src/graphics/draw/MenuHandler.cpp`](src/graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](src/graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK`. |
-| [`src/input/InputBroker.cpp`](src/input/InputBroker.cpp) | Heartbeat input hook when `VALKYRIE_FORK`. |
+| [`src/graphics/draw/MenuHandler.cpp`](src/graphics/draw/MenuHandler.cpp), [`MenuHandler.h`](src/graphics/draw/MenuHandler.h) | Extra `screenMenus` enum values and switch arms for Valkyrie menus when `VALKYRIE_FORK` (incl. wardrive entries). |
+| [`src/input/InputBroker.cpp`](src/input/InputBroker.cpp) | Heartbeat **and wardrive** input hooks when `VALKYRIE_FORK`. |
 | [`src/graphics/draw/ClockRenderer.cpp`](src/graphics/draw/ClockRenderer.cpp) | When `VALKYRIE_FORK` + `ARCH_ESP32`: digital clock delegates body layout to `forks/valkyrie/ui/ValkyrieDigitalClockLayout` (Valkyrie sprite + top time row); `#else` path unchanged. |
 | [`src/modules/Telemetry/DeviceTelemetry.cpp`](src/modules/Telemetry/DeviceTelemetry.cpp) | `VALKYRIE_FORK` + `__has_include("forks/valkyrie/persist/MeshExperience.h")` (one-line hook at the top of `runOnce()` to credit passive mesh-participation XP on the existing 60 s telemetry tick). |
+| [`src/GPSStatus.h`](src/GPSStatus.h) | Additive `getHasUsablePosition()` accessor + lat/lon/alt fallback into `localPosition` (gated by a 30 s freshness window from `nodeDB->getLastLocalPositionUpdateMs()`). `getHasLock()` semantics unchanged — only the public lat/lon/alt accessors widened. Stock-safe: no stock caller reads the new accessor. |
+| [`src/mesh/NodeDB.h`](src/mesh/NodeDB.h), [`NodeDB.cpp`](src/mesh/NodeDB.cpp) | Stamp `millis()` into a new `lastLocalPositionUpdateMs` member each time `setLocalPosition` receives non-zero coordinates; reset it in `clearLocalPosition`. New `getLastLocalPositionUpdateMs()` accessor. Stock-safe — additive. |
+| [`src/graphics/draw/UIRenderer.cpp`](src/graphics/draw/UIRenderer.cpp) | Under `#if defined(VALKYRIE_FORK)` only: swap four "No Lock" / sat-count badge sites from `getHasLock()` to the new `getHasUsablePosition()` so the UI shows "Phone" instead of "No Sats" while phone-supplied position is live. |
 | [`variants/esp32s3/t-watch-s3-valkyrie/platformio.ini`](variants/esp32s3/t-watch-s3-valkyrie/platformio.ini) | Parallel env: `-DVALKYRIE_FORK=1`, `-Isrc/forks/valkyrie`, `build_src_filter` for `forks/valkyrie/` (test subtree excluded from firmware). |
 
 Non-Valkyrie builds never define `VALKYRIE_FORK` and do not compile `src/forks/valkyrie/` (see root `platformio.ini` `arduino_base.build_src_filter`), so fork code and graphics hooks compile out.
@@ -61,13 +65,17 @@ forks/valkyrie/
     FlockOuiTable.h                 Flock infra OUI matching (Wi‑Fi path)
     AirtagStalkingState.{h,cpp}     GPS-backed stalking gate for AirTag
     GeoStalking.{h,cpp}             GPS lock or fixed position for stalking
-  ui/                               menus, hub frame, heartbeat UI/input
+    WardriveSession.{h,cpp}         OSThread: WiFi.scanNetworks + GPS + Wigle log
+  ui/                               menus, hub frame, heartbeat + wardrive UI/input
   prefs/
     ValkyriePrefs.{h,cpp}           private NVS namespace via Preferences
   persist/
     ThreatLog.{h,cpp}               LittleFS append + 32 KB rotate
     ThreatLogDecode.{h,cpp}         pure CSV decode helpers (host-testable)
+    ExperienceLog.{h,cpp}           fixed RAM ring of recent XP sources for Exp log UI
     ThreatIgnoreList.{h,cpp}        NVS ignore list backing store
+    WigleFormat.{h,cpp}             pure Wigle 1.6 row/header/haversine (host-testable)
+    WigleLog.{h,cpp}                LittleFS wardrive session writer + FIFO prune
   proto/
     threat_event.proto              fork-local nanopb schema
     generated/                      pre-generated nanopb sources
@@ -79,6 +87,68 @@ forks/valkyrie/
   userPrefs.valkyrie.jsonc          fork-only defaults (NOT upstream's)
   regen-proto.sh                    fork-only nanopb generator
 ```
+
+## Centralized GPS source
+
+The T‑Watch S3 doesn't have an on-device GPS chip, but the paired phone pushes
+position into `nodeDB->setLocalPosition()` continuously via the GATT phone link.
+Stock `gpsStatus` only routed that through to `getLatitude()` / `getLongitude()`
+when `config.position.fixed_position` was set, so a phone-only watch reported
+"No Lock" everywhere — including the AirTag stalking gate, which made the
+stalking heuristic effectively unreachable on the standard hardware variant.
+
+The fork widens `gpsStatus` instead of growing a parallel helper:
+
+- `getHasLock()` keeps its narrow on-device-chip semantic (so e.g.
+  `MeshService::onGPSChanged` continues to copy `gps->p` only when the chip
+  really has a fix).
+- New `getHasUsablePosition()` returns true when **any** of the following hold:
+  on-device lock, fixed-position mode with non-zero localPosition, or fresh
+  phone-supplied localPosition (last update within
+  `GPSStatus::kPhonePositionFreshMs` = 30 s).
+- `getLatitude()` / `getLongitude()` / `getAltitude()` fall back to
+  `localPosition.*` when `hasLock` is false but `getHasUsablePosition()` is true.
+
+Side benefit: the existing AirTag GPS stalking gate now works on a phone-only
+S3 with no expansion module (the "Alerts need to be refined for airtag" item in
+**Known issues** is partially addressed as a result —
+[`GeoStalking.cpp`](src/forks/valkyrie/modules/GeoStalking.cpp) collapses to a
+one-liner that just calls `getHasUsablePosition()`). Wardrive mode consumes the
+same accessor so it works transparently on watches with or without an on-device
+GPS module.
+
+## Wigle CSV format
+
+Wardrive sessions write **Wigle 1.6**-compatible CSV files at
+`/valkyrie/wardrive/wardrive_<unixSecs>.csv` on LittleFS, one file per session.
+The phone app can pull them via the Meshtastic file API for later upload to
+Wigle.net or offline analysis.
+
+```
+WigleWifi-1.6,appRelease=Valkyrie,model=T-Watch-S3,release=Meshtastic,device=t-watch-s3,display=NONE,board=ESP32-S3,brand=LilyGo
+MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type
+AA:BB:CC:DD:EE:FF,"MyWifi",[WPA2-PSK-CCMP][ESS],2026-05-13 20:30:15,6,2437,-65,40.712800,-74.006000,12.50,5.00,,,WIFI
+```
+
+`AuthMode` follows the Wigle bracketed-cipher convention and always ends in
+`[ESS]` for an infrastructure AP. Lat/Lon/Alt come from
+`gpsStatus->getLatitude() / 1e7` etc. — callers don't have to know whether the
+source is on-device GPS, fixed position, or phone-supplied. `AccuracyMeters`
+derives from `gpsStatus->getDOP()` (HDOP·5 m proxy) when an on-device fix is
+present; phone-supplied fixes fall back to a conservative 25 m constant since
+DOP is GPS-chip-only. Pure helpers for header / row / haversine / ISO-8601 live
+in [`persist/WigleFormat.{h,cpp}`](src/forks/valkyrie/persist/WigleFormat.h)
+and are covered by [`test/test_wigle_format.cpp`](src/forks/valkyrie/test/test_wigle_format.cpp)
+(host-buildable). Discovery uses **passive** `WiFi.scanNetworks` (150 ms/channel, 10 s spacing by default)
+so beacon-based rows favor BLE coexistence over probe-heavy active scans.
+
+### Wardrive NVS prefs
+
+| Key (NVS) | C++ field | Default | Notes |
+|-----------|-----------|---------|-------|
+| `wd_req_fix` | `wardriveRequireFix` | `true` | When true, skip Wigle rows while `getHasUsablePosition()` is false (no on-device fix, no fixed_position, no fresh phone-supplied localPosition). Threats still classify and log. |
+| `wd_per_ms` | `wardriveScanPeriodMs` | `10000` (ms) | Period between consecutive passive `WiFi.scanNetworks` bursts. Clamped to [1000, 60000]. |
+| `wd_phn` | `wardrivePhoneNotify` | `true` | Forward classifier hits to the phone (PRIVATE_APP + ClientNotification) during a drive. When off, threats still write to `threats.log` but the phone link stays quiet. |
 
 ## Build
 
@@ -107,9 +177,7 @@ Stuff not done yet, or deliberately deferred.
 
 ### Phase 2
 
-**More ways to exp:** An exp log displaying exp gained and its source. Passive **mesh-participation XP** now ships: a 60 s tick (piggybacked on `DeviceTelemetryModule::runOnce()`) reads the `RadioLibInterface` + `Router` counters that already feed `LocalStats` (`txRelay` / `txRelayCanceled` / `rxGood`, with an `rxDupe` penalty), credits weighted XP for the delta, and feeds a unified hub-HUD level (threat XP + mesh XP) via `forks/valkyrie/persist/MeshExperience.{h,cpp}`. Still planned: an exp log UI showing source-tagged gains, and **wardriving** XP (active exping. Networks scanned+distance+threats found that's session based via heartbeat style screen with stats and tap to stop).
-
-**Wi‑Fi deauth / disassoc & EAPOL false alarms:** today these are **single-frame heuristics** (management deauth/disassoc; data frames with EAPOL LLC snap). Future work: **rate limits and burst detection** (ignore one-off noise; require sustained or patterned abuse), **pair-aware context** (relate source/destination MAC and optional BSSID roles where inferable), **EAPOL sanity** (handshake phase hints vs stray encrypted garbage), and optional **SSID / privacy / channel** context so normal roaming or noisy cafés don’t look like attacks. Goal: fewer false positives without hiding real incidents.
+**BLE wardrive companion:** today's wardriving is Wi‑Fi-only. Still planned: BLE wardrive rows (CSV `Type=BLE`), the same heartbeat-style session screen, and an XP curve that fits beside the shipped threat / mesh / Wi‑Fi wardrive sources without making background scans noisy.
 
 **Threat Sensitivity setting:** A threat warning setting which contains 2 modes, normal and paranoid, defaulted to normal. Paranoid disables the alert alarm fatigue logic. Any deauth, airtag etc. will be considered a threat.
 

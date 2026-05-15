@@ -1085,6 +1085,7 @@ void NodeDB::clearLocalPosition()
     node->position.time = 0;
     setLocalPosition(meshtastic_Position_init_default);
     localPositionUpdatedSinceBoot = false;
+    lastLocalPositionUpdateMs = 0;
 }
 
 void NodeDB::cleanupMeshDB()

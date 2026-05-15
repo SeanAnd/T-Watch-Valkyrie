@@ -100,6 +100,21 @@ class BleThreatDetectorModule : private concurrency::OSThread
         return prefs.bleThreatDetectorEnabled && prefs.constantBleScanMode && prefs.bleThreatPhaseEnabled;
     }
 
+    /** Pause all detector duty work so the wardrive session can own the Wi‑Fi radio for the
+     *  duration of the drive. Aborts any in-flight BLE scan + Wi‑Fi promiscuous pass (same path
+     *  as the sleep-edge teardown) and sets a flag that early-returns runOnce(), refuses light
+     *  sleep, and pumps EVENT_CONTACT_FROM_PHONE so PowerFSM stays in DARK/ON. Safe to call when
+     *  already paused. */
+    void pauseForWardrive();
+
+    /** Clear the wardrive-paused flag. Next runOnce() tick resumes the normal duty cycle. */
+    void resumeFromWardrive();
+
+    /** True while the wardrive session has paused the duty cycle (hub-renderer predicate sibling
+     *  to isConstantBleChainActive: both indicate "the radio is intentionally busy, do not draw
+     *  sleep-related sprites"). */
+    bool isWardriveOwningRadio() const { return wardriveActive; }
+
   private:
     // OSThread hook.
     int32_t runOnce() override;
@@ -189,6 +204,10 @@ class BleThreatDetectorModule : private concurrency::OSThread
     uint32_t hubBleWindowEndMs = 0;
     /// True while the chunked Wi‑Fi promiscuous threat pass is in progress (hub status).
     volatile bool wifiThreatPassActive = false;
+    /// True while a wardrive session has paused us (see pauseForWardrive / resumeFromWardrive).
+    /// Read by runOnce()/preflightSleepCb()/isWardriveOwningRadio() and the LS keep-awake nudge.
+    /// Volatile because the wardrive UI tap that clears it runs on a different task.
+    volatile bool wardriveActive = false;
     /// If constant BLE scan is on, start the next window only after async Wi‑Fi pass completes.
     bool deferredConstantBleScanRestart = false;
 

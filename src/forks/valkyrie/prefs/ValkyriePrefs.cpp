@@ -32,6 +32,10 @@ static constexpr const char *kKeyWifiThreatMs = "wifi_ms";
 static constexpr const char *kKeyWifiThreatDw = "wifi_dw";
 /// One-shot NVS upgrade marker: sync legacy installs where wifi_msk had types on but wifi_en stayed false.
 static constexpr const char *kKeyWifiMig = "wifi_mig1";
+// Wardrive prefs (session-based Wi‑Fi wardrive mode).
+static constexpr const char *kKeyWardriveReqFix = "wd_req_fix";
+static constexpr const char *kKeyWardrivePerMs = "wd_per_ms";
+static constexpr const char *kKeyWardrivePhone = "wd_phn";
 
 ValkyriePrefs ValkyriePrefs::defaults()
 {
@@ -60,6 +64,9 @@ ValkyriePrefs ValkyriePrefs::defaults()
     // Default promiscuous scan budget: match default scanWindowSecs (10 s).
     p.wifiThreatPassMs = 10000;
     p.wifiThreatChannelDwellMs = 350;
+    p.wardriveRequireFix = true;
+    p.wardriveScanPeriodMs = 10000; // passive bursts are short (~2 s); 10 s gap favors BLE / phone coords
+    p.wardrivePhoneNotify = true;
     return p;
 }
 
@@ -95,6 +102,9 @@ ValkyriePrefs ValkyriePrefs::load()
         prefs.putUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask);
         prefs.putUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
         prefs.putUShort(kKeyWifiThreatDw, def.wifiThreatChannelDwellMs);
+        prefs.putBool(kKeyWardriveReqFix, def.wardriveRequireFix);
+        prefs.putUShort(kKeyWardrivePerMs, def.wardriveScanPeriodMs);
+        prefs.putBool(kKeyWardrivePhone, def.wardrivePhoneNotify);
         prefs.putBool(kKeySeeded, true);
     }
 
@@ -119,6 +129,9 @@ ValkyriePrefs ValkyriePrefs::load()
         static_cast<uint8_t>(prefs.getUChar(kKeyWifiThreatMsk, def.wifiThreatScanMask) & ValkyriePrefs::kWifiThreatScanMaskAll);
     out.wifiThreatPassMs = prefs.getUShort(kKeyWifiThreatMs, def.wifiThreatPassMs);
     out.wifiThreatChannelDwellMs = prefs.getUShort(kKeyWifiThreatDw, def.wifiThreatChannelDwellMs);
+    out.wardriveRequireFix = prefs.getBool(kKeyWardriveReqFix, def.wardriveRequireFix);
+    out.wardriveScanPeriodMs = prefs.getUShort(kKeyWardrivePerMs, def.wardriveScanPeriodMs);
+    out.wardrivePhoneNotify = prefs.getBool(kKeyWardrivePhone, def.wardrivePhoneNotify);
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
     const uint8_t wifiMigLegacy = prefs.getUChar(kKeyWifiMig, 0);
 #else
@@ -166,6 +179,11 @@ ValkyriePrefs ValkyriePrefs::load()
         out.wifiThreatChannelDwellMs = 600;
     if ((out.wifiThreatScanMask & ValkyriePrefs::kWifiThreatScanMaskAll) == 0)
         out.wifiThreatScanMask = def.wifiThreatScanMask;
+    // Wardrive scan period: <1 s pegs the radio with no UI breathing room; >60 s makes the screen feel dead.
+    if (out.wardriveScanPeriodMs < 1000)
+        out.wardriveScanPeriodMs = 1000;
+    if (out.wardriveScanPeriodMs > 60000)
+        out.wardriveScanPeriodMs = 60000;
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
     // Legacy contradiction: threat toggles (wifi_msk / Flock) implied Wi‑Fi work while wifi_en stayed false from older seeds.
@@ -226,6 +244,9 @@ void ValkyriePrefs::save() const
     prefs.putUChar(kKeyWifiThreatMsk, static_cast<uint8_t>(wifiThreatScanMask & ValkyriePrefs::kWifiThreatScanMaskAll));
     prefs.putUShort(kKeyWifiThreatMs, wifiThreatPassMs);
     prefs.putUShort(kKeyWifiThreatDw, wifiThreatChannelDwellMs);
+    prefs.putBool(kKeyWardriveReqFix, wardriveRequireFix);
+    prefs.putUShort(kKeyWardrivePerMs, wardriveScanPeriodMs);
+    prefs.putBool(kKeyWardrivePhone, wardrivePhoneNotify);
     prefs.putBool(kKeySeeded, true);
     prefs.end();
 }
@@ -259,6 +280,9 @@ ValkyriePrefs ValkyriePrefs::defaults()
     // Same default as ESP32 path (mirrors 10 s scan window when enabled).
     p.wifiThreatPassMs = 10000;
     p.wifiThreatChannelDwellMs = 350;
+    p.wardriveRequireFix = true;
+    p.wardriveScanPeriodMs = 10000;
+    p.wardrivePhoneNotify = true;
     return p;
 }
 ValkyriePrefs ValkyriePrefs::load() { return defaults(); }

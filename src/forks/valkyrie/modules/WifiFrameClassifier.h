@@ -10,41 +10,79 @@ namespace valkyrie
 
 bool wifi80211ParseFrameControl(const uint8_t *frame, size_t len, uint8_t *typeOut, uint8_t *subtypeOut);
 
-/// Management / extension fields: Addr1 @4, Addr2 @10, Addr3 @16 (24-byte header).
+/// Management / extension fields: Addr1 @4, Addr2 @10, Addr3 @16 (24-byte
+/// header).
 bool wifi80211CopyAddr123(const uint8_t *frame, size_t len, uint8_t addr1[6], uint8_t addr2[6], uint8_t addr3[6]);
 
 bool wifi80211IsBroadcastMac(const uint8_t mac[6]);
 bool wifi80211IsMulticastMac(const uint8_t mac[6]);
+bool wifi80211IsZeroMac(const uint8_t mac[6]);
 /// IEEE 802: locally administered (includes typical randomised STA addresses).
 bool wifi80211IsLocallyAdministeredMac(const uint8_t mac[6]);
 
-/// Probe Request + SSID IE tag 0 length 0 (wildcard), flock-you / DeFlockJoplin signature.
+/// Probe Request + SSID IE tag 0 length 0 (wildcard), flock-you / DeFlockJoplin
+/// signature.
 bool wifi80211IsWildcardProbeRequest(const uint8_t *frame, size_t len);
 
 /// Management subtype 0x0A disassoc or 0x0C deauth.
 bool wifi80211MgmtIsDeauthDisassoc(const uint8_t *frame, size_t len);
 
-/// Data frame: LLC/SNAP EAPOL (88 8E) after variable MAC header; hdrBytesOut optional.
+/// Data frame: LLC/SNAP EAPOL (88 8E) after variable MAC header; hdrBytesOut
+/// optional.
 bool wifi80211DataHasEapol(const uint8_t *frame, size_t len, size_t *hdrBytesOut);
 
-/// Beacon: extract SSID (tag 0) into ssidOut (NUL-terminated), caps LE at offset 34 for privacy bit.
+enum class WifiEapolKeyPhase : uint8_t {
+    None = 0,
+    Msg1 = 1,
+    Msg2 = 2,
+    Msg3 = 3,
+    Msg4 = 4,
+    OtherKey = 5,
+};
+
+struct WifiEapolInfo {
+    size_t macHeaderBytes;
+    uint8_t version;
+    uint8_t packetType;
+    uint16_t bodyLen;
+    bool isKey;
+    uint8_t descriptorType;
+    uint16_t keyInfo;
+    bool pairwiseKey;
+    WifiEapolKeyPhase phase;
+};
+
+/// Strict EAPOL parser: validates 802.1X header length and WPA/EAPOL-Key shape
+/// before returning true.
+bool wifi80211DataExtractEapolInfo(const uint8_t *frame, size_t len, WifiEapolInfo *infoOut);
+
+/// Infer infrastructure pair for data frames. Returns BSSID + station when
+/// ToDS/FromDS roles are usable.
+bool wifi80211DataExtractBssidStation(const uint8_t *frame, size_t len, uint8_t bssidOut[6], uint8_t stationOut[6]);
+
+/// Beacon: extract SSID (tag 0) into ssidOut (NUL-terminated), caps LE at
+/// offset 34 for privacy bit.
 bool wifi80211BeaconExtractSsidAndPrivacy(const uint8_t *frame, size_t len, char *ssidOut, size_t ssidCap,
                                           bool *privacyOnOut);
 
 /// Simple DJB-ish hash over SSID bytes for MultiSSID tracking.
 uint16_t wifi80211HashSsidBytes(const uint8_t *ssid, size_t ssidLen);
 
-/// Marauder-style suspicious AP OUIs (trimmed set); open-only heuristic optional via privacyOn.
+/// Marauder-style suspicious AP OUIs (trimmed set); open-only heuristic
+/// optional via privacyOn.
 bool wifi80211MacMatchesSuspiciousVendorOui(const uint8_t mac[6], bool privacyOn, const char **vendorLabelOut);
 
-/// Heuristic: JSON-ish beacon containing Pwnagotchi markers ("pwnd_tot" + "name").
+/// Heuristic: JSON-ish beacon containing Pwnagotchi markers ("pwnd_tot" +
+/// "name").
 bool wifi80211BeaconLooksLikePwnagotchi(const uint8_t *frame, size_t len);
 
-/// ASTM/OpenDroneID Wi‑Fi NAN-style signature (matches Sky-Spy dest MAC gate): management frame with Addr1 ==
-/// 51:6f:9a:01:00:00. Does not decode payload — fingerprint only.
+/// ASTM/OpenDroneID Wi‑Fi NAN-style signature (matches Sky-Spy dest MAC gate):
+/// management frame with Addr1 == 51:6f:9a:01:00:00. Does not decode payload —
+/// fingerprint only.
 bool wifi80211MgmtRemoteIdNanSignature(const uint8_t *frame, size_t len);
 
-/// Beacon carrying vendor IE 0xDD with ASTM/OpenDroneID OUIs (90:3a:e6 or fa:0b:bc per Sky-Spy). Fingerprint only.
+/// Beacon carrying vendor IE 0xDD with ASTM/OpenDroneID OUIs (90:3a:e6 or
+/// fa:0b:bc per Sky-Spy). Fingerprint only.
 bool wifi80211BeaconHasRemoteIdVendorIe(const uint8_t *frame, size_t len);
 
 } // namespace valkyrie

@@ -53,5 +53,16 @@
     "wifiThreatScanMask": 31,
     // Default matches scanWindowSecs (10 s) → 10000 ms; see ValkyriePrefs::defaults().
     "wifiThreatPassMs": 10000,
-    "wifiThreatChannelDwellMs": 350
+    "wifiThreatChannelDwellMs": 350,
+
+    // Wardrive (Wi‑Fi only, session-based; tap-to-stop). NVS keys wd_req_fix, wd_per_ms, wd_phn.
+    // wardriveRequireFix: when true, skip Wigle rows while getHasUsablePosition() is false (no on-device
+    // GPS fix, no fixed_position, and no fresh phone-supplied localPosition). Same "No Fix" guard as Marauder.
+    "wardriveRequireFix": true,
+    // ms between consecutive WiFi.scanNetworks bursts during a session. Clamped to [1000, 60000].
+    // Default 10 s trades row density for BLE / phone-supplied GPS health (paired with passive scan).
+    "wardriveScanPeriodMs": 10000,
+    // forward classifier hits during a drive to the phone (PRIVATE_APP + ClientNotification). When off
+    // the drive is silent on the phone link (CSV still records, threats still write to threats.log).
+    "wardrivePhoneNotify": true
 }
