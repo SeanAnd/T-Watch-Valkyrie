@@ -15,17 +15,15 @@
 #include <stdint.h>
 #include <string>
 
-// Forward declarations to avoid pulling NimBLE into our public header.
-class NimBLEScan;
-class NimBLEAdvertisedDevice;
+struct ble_gap_event;
 
 namespace valkyrie
 {
 
 // Power-aware passive BLE threat detector. Runs as a single
 // concurrency::OSThread instance owned by ValkyrieFork.cpp. Piggybacks
-// on the NimBLE stack already initialised by the upstream Meshtastic
-// GATT server, so the phone link is unaffected.
+// on the NimBLE host already initialised by the upstream Meshtastic GATT
+// server.
 //
 // Lifecycle (driven by runOnce()):
 //
@@ -35,7 +33,7 @@ namespace valkyrie
 //                            (BLE window + Wi‑Fi promiscuous phase); PowerFSM in {ON, DARK},
 //                            battery OK. BLE path requires NimBLE initialised.
 //   Wi‑Fi‑only When bleThreatPhaseEnabled is false and prefs allow Wi‑Fi work, idle gap then
-//               async Wi‑Fi pass only (no NimBLE window); hubBleWindowEndMs anchored for sprite timeline.
+//               async Wi‑Fi pass only (no BLE window); hubBleWindowEndMs anchored for sprite timeline.
 //   Scanning  -> Idle       after BLE window completes, Wi‑Fi threat pass runs,
 //                            then lastScanWindowEndMs updates (wardriving-style pass)
 //   any       -> Disabled   on notifyDeepSleep / notifyLightSleep
@@ -58,7 +56,7 @@ class BleThreatDetectorModule : private concurrency::OSThread
     bool isWifiThreatPassActive() const { return wifiThreatPassActive; }
     uint32_t getScanStartedMs() const { return scanStartedMs; }
     uint32_t getLastScanWindowEndMs() const { return lastScanWindowEndMs; }
-    /** Millis when the NimBLE scan window stopped (hub sprite: BLE outro anchor before/during Wi‑Fi phase). */
+    /** Millis when the BLE scan window stopped (hub sprite: BLE outro anchor before/during Wi‑Fi phase). */
     uint32_t getHubBleWindowEndMs() const { return hubBleWindowEndMs; }
 
     /** Reload prefs from NVS (call after changing threat-type or scan prefs in UI). */
@@ -74,7 +72,7 @@ class BleThreatDetectorModule : private concurrency::OSThread
                         uint8_t channel);
 
     /** Proximity “heartbeat” listen mode for one MAC. `source` selects radio path:
-     *  Ble => continuous NimBLE passive scan with duplicates on; Wifi => esp_wifi promiscuous
+     *  Ble => continuous passive BLE scan with duplicates on; Wifi => esp_wifi promiscuous
      *  filtering for `mac`, optionally locked to `lockChannel` (1/6/11; 0 keeps hopping 1/6/11). */
     bool startHeartbeat(const uint8_t mac[6], ThreatType type, ThreatSource source, uint8_t lockChannel);
     void stopHeartbeat();
@@ -122,7 +120,7 @@ class BleThreatDetectorModule : private concurrency::OSThread
     void initScanIfNeeded();
     bool shouldScan() const;
     void startScanWindow();
-    /// Stop NimBLE scan hardware if active; does not update hub timing or run Wi-Fi phase.
+    /// Stop BLE scan hardware if active; does not update hub timing or run Wi-Fi phase.
     void haltBleScan();
     /// End of duty-cycle BLE phase: Wi‑Fi promiscuous pass when enabled (passive duty only), then lastScanWindowEndMs.
     void finalizeDutyThreatPass();
@@ -131,10 +129,15 @@ class BleThreatDetectorModule : private concurrency::OSThread
     /// Fast teardown before LS/deep sleep or when handing off to heartbeat: no Wi‑Fi pass.
     void abortBleScanForSleep();
 
-    // Friends needed because the NimBLE callback shim (a private class
-    // inside the .cpp) reaches in to call onAdvertisement().
-    friend class BleScanCallback;
-    void onAdvertisement(NimBLEAdvertisedDevice *advertisedDevice);
+    bool startBleDiscovery(uint32_t durationMs, bool wantDuplicates);
+    bool isBleDiscoveryActive() const;
+    void resumeBleAdvertisingIfPaused();
+
+    // Friend needed because the NimBLE C callback shim reaches in from the .cpp.
+    friend int valkyrieBleGapEvent(struct ble_gap_event *event, void *arg);
+    void onBleGapEvent(struct ble_gap_event *event);
+    void onBleAdvertisement(const uint8_t nativeAddr[6], const uint8_t *payload, size_t payloadLen, const char *name,
+                            int32_t rssi);
 
     // sleep observers — abort in-flight scan before the system enters LS/SDS.
     int onLightSleep(void *unused);
@@ -189,15 +192,15 @@ class BleThreatDetectorModule : private concurrency::OSThread
     AirtagStalkingState airtagStalking;
 
     // Scan state.
-    NimBLEScan *scan = nullptr;
     bool scanInitialised = false;
     bool scanActive = false;
+    bool bleAdvertisingPausedForScan = false;
     /// At most one threat haptic per passive scan window (`emitDetection`; reset in startScanWindow).
     bool hapticEmittedThisScanWindow = false;
     /// At most one threat sound per passive scan window (`emitDetection`; reset in startScanWindow).
     bool soundEmittedThisScanWindow = false;
     uint32_t scanStartedMs = 0;
-    /// Set when a scan window ends (NimBLE stop or forced stop). Zero means
+    /// Set when a scan window ends (BLE stop or forced stop). Zero means
     /// no window has completed yet this session — no inter-window gap then.
     uint32_t lastScanWindowEndMs = 0;
     /// When the BLE phase stopped (`haltBleScan`); hub uses this so Wi‑Fi promiscuous time does not reuse the sleep timeline.
@@ -226,7 +229,7 @@ class BleThreatDetectorModule : private concurrency::OSThread
     ThreatSource heartbeatSource = ThreatSource::Ble;
     uint8_t heartbeatLockChannel = 0;
 
-    // Heartbeat RSSI: EMA + hysteresis (updated only from onAdvertisement / NimBLE path).
+    // Heartbeat RSSI: EMA + hysteresis (updated only from onBleAdvertisement / BLE path).
     volatile bool heartbeatSmoothedValid = false;
     volatile int32_t heartbeatSmoothedRssi = -128;
     volatile uint8_t heartbeatLatchedTierU8 = 0; // HeartbeatSignalTier

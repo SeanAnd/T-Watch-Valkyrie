@@ -796,9 +796,15 @@ bool tickWifiThreatPass(BleThreatDetectorModule *mod)
         esp_wifi_set_promiscuous_rx_cb(&promiscCb);
         if (esp_wifi_set_promiscuous(true) != ESP_OK) {
             LOG_WARN("Valkyrie: esp_wifi_set_promiscuous(true) failed");
-            // No mode restore here either; if init succeeded but
-            // promiscuous failed, leaving STA up is consistent with the
-            // hot-path invariant and avoids the leaky WIFI_OFF cycle.
+            // Balance the esp_wifi_start() (hot path) / WiFi.mode(WIFI_STA)
+            // (cold path) that already powered the modem up for this pass.
+            // Bailing out via resetPassMachine() alone would leave the radio
+            // running, and the next pass's begin() hot-path esp_wifi_start()
+            // would then double-start an already-started driver every cycle.
+            // Clear the rx cb and stop the modem so start/stop stays balanced.
+            // No WIFI_OFF cycle (that path is the leaky one); just stop().
+            esp_wifi_set_promiscuous_rx_cb(nullptr);
+            esp_wifi_stop();
             resetPassMachine();
             return true;
         }

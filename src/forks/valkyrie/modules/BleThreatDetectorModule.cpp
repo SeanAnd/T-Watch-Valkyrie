@@ -23,7 +23,9 @@
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
 
-#include <NimBLEDevice.h>
+#include <host/ble_gap.h>
+#include <host/ble_hs.h>
+#include <host/ble_hs_id.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -35,6 +37,9 @@ namespace valkyrie
 
 namespace
 {
+
+static constexpr uint16_t kBleScanIntervalUnits = 160; // 100ms, in 0.625ms controller units.
+static constexpr uint16_t kBleScanWindowUnits = 64;    // 40ms, in 0.625ms controller units.
 
 // Map our internal classifier enum to the wire-format nanopb enum. Kept
 // in this file (and only this file) so BleClassifier.{h,cpp} can be
@@ -104,31 +109,51 @@ static void pulseThreatSoundOnce(bool &latch)
 }
 #endif
 
+static void extractLocalName(const uint8_t *payload, size_t payloadLen, char *name, size_t nameLen)
+{
+    if (!name || nameLen == 0)
+        return;
+    name[0] = '\0';
+    if (!payload)
+        return;
+
+    const uint8_t *best = nullptr;
+    size_t bestLen = 0;
+    size_t i = 0;
+    while (i < payloadLen) {
+        const uint8_t adLen = payload[i];
+        if (adLen == 0)
+            break;
+        if (i + 1 + (size_t)adLen > payloadLen)
+            break;
+
+        const uint8_t adType = payload[i + 1];
+        if (adType == 0x08 || adType == 0x09) {
+            best = payload + i + 2;
+            bestLen = (size_t)adLen - 1;
+            if (adType == 0x09)
+                break;
+        }
+        i += 1 + (size_t)adLen;
+    }
+
+    if (!best)
+        return;
+    if (bestLen >= nameLen)
+        bestLen = nameLen - 1;
+    memcpy(name, best, bestLen);
+    name[bestLen] = '\0';
+}
+
 } // namespace
 
-// Single global module instance pointer, set by the constructor and used
-// by the NimBLE callback shim. The fork only ever instantiates one
-// BleThreatDetectorModule (owned by ValkyrieFork.cpp).
-BleThreatDetectorModule *g_module = nullptr;
-
-
-// NimBLE 1.4.3 (pinned by upstream Meshtastic for esp32/esp32s3) uses
-// the `NimBLEAdvertisedDeviceCallbacks` subclass shape. The callback
-// just hands the raw advertised device to the module and returns; the
-// classifier runs synchronously in NimBLE's host task because it is
-// cheap (TLV walks + small OUI table) and we don't want to
-// queue/copy advertisement payloads in RAM.
-class BleScanCallback : public NimBLEAdvertisedDeviceCallbacks
+int valkyrieBleGapEvent(struct ble_gap_event *event, void *arg)
 {
-  public:
-    void onResult(NimBLEAdvertisedDevice *advertisedDevice) override
-    {
-        if (g_module && advertisedDevice)
-            g_module->onAdvertisement(advertisedDevice);
-    }
-};
-
-static BleScanCallback g_scanCallback;
+    auto *module = static_cast<BleThreatDetectorModule *>(arg);
+    if (module)
+        module->onBleGapEvent(event);
+    return 0;
+}
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 static bool wifiPhaseShouldRun(const ValkyriePrefs &p)
@@ -158,7 +183,6 @@ static bool anyDutyThreatWork(const ValkyriePrefs &p)
 BleThreatDetectorModule::BleThreatDetectorModule(const ValkyriePrefs &p)
     : OSThread("ValkyrieBLE"), prefs(p)
 {
-    g_module = this;
     ThreatIgnoreList::reloadCache();
 
     // Subscribe to sleep events so we can stop the radio cleanly before
@@ -185,8 +209,6 @@ BleThreatDetectorModule::~BleThreatDetectorModule()
     preflightSleepObserver.unobserve(&preflightSleep);
     lightSleepObserver.unobserve(&notifyLightSleep);
     deepSleepObserver.unobserve(&notifyDeepSleep);
-    if (g_module == this)
-        g_module = nullptr;
 }
 
 // ----------------------------------------------------------------------------
@@ -198,36 +220,22 @@ void BleThreatDetectorModule::initScanIfNeeded()
     if (scanInitialised)
         return;
 
-    // We rely on Meshtastic's NimbleBluetooth having already called
-    // NimBLEDevice::init() for the GATT server. If the user disabled
+    // We rely on Meshtastic's NimBLE service having already initialised
+    // the host for the GATT server. If the user disabled
     // bluetooth (wait_bluetooth_secs expired with no client, or BT
     // turned off in config), nimbleBluetooth->isActive() will be false
-    // and getScan() may not be safe. In that case we skip scanning —
+    // and scanning is not safe. In that case we skip scanning —
     // Phase 1 is intentionally cooperative with phone connectivity, not
     // a replacement for it.
     if (!nimbleBluetooth || !nimbleBluetooth->isActive()) {
         return;
     }
-
-    scan = NimBLEDevice::getScan();
-    if (!scan)
+    if (!ble_hs_is_enabled() || !ble_hs_synced()) {
         return;
-
-    scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/false);
-    // Passive scan only — DO NOT call setActiveScan(true), that would TX
-    // SCAN_REQ packets and burn battery + draw attention. The tracker
-    // detection logic only needs ADV_IND payloads.
-    scan->setActiveScan(false);
-    // ~40% in-window radio duty (0.5ms units). A continuous-mode scan
-    // with interval==window would lock the radio and break the GATT
-    // server.
-    scan->setInterval(160);
-    scan->setWindow(64);
-    // Stream results through onResult() instead of accumulating them.
-    scan->setMaxResults(0);
+    }
 
     scanInitialised = true;
-    LOG_INFO("Valkyrie: BLE scan initialised (interval=160 window=64 passive max_results=0)");
+    LOG_INFO("Valkyrie: BLE scan initialised (interval=100ms window=40ms passive stream)");
 }
 
 bool BleThreatDetectorModule::shouldScan() const
@@ -248,16 +256,68 @@ bool BleThreatDetectorModule::shouldScan() const
     return true;
 }
 
-void BleThreatDetectorModule::startScanWindow()
+bool BleThreatDetectorModule::isBleDiscoveryActive() const
 {
-    if (!scan || scanActive)
+    return ble_gap_disc_active() != 0;
+}
+
+void BleThreatDetectorModule::resumeBleAdvertisingIfPaused()
+{
+    if (!bleAdvertisingPausedForScan)
         return;
 
-    // Duration arg is in seconds. Passing 0 means "scan forever" — DO
-    // NOT do that; we want NimBLE to auto-stop after our window so we
-    // don't have to perfectly time our own stop call against an LS
-    // transition.
-    if (scan->start(prefs.scanWindowSecs, /*scanCompleteCB=*/nullptr, /*is_continue=*/false)) {
+    bleAdvertisingPausedForScan = false;
+    if (nimbleBluetooth && nimbleBluetooth->isActive() && !nimbleBluetooth->isConnected()) {
+        nimbleBluetooth->startAdvertising();
+    }
+}
+
+bool BleThreatDetectorModule::startBleDiscovery(uint32_t durationMs, bool wantDuplicates)
+{
+    if (!ble_hs_is_enabled() || !ble_hs_synced())
+        return false;
+
+    uint8_t ownAddrType = BLE_OWN_ADDR_PUBLIC;
+    const int inferRc = ble_hs_id_infer_auto(0, &ownAddrType);
+    if (inferRc != 0)
+        LOG_WARN("Valkyrie: BLE own address infer failed rc=%d, using public", inferRc);
+
+    ble_gap_disc_params params{};
+    params.filter_policy = BLE_HCI_SCAN_FILT_NO_WL;
+    params.passive = 1;
+    params.limited = 0;
+    params.filter_duplicates = wantDuplicates ? 0 : 1;
+    params.itvl = kBleScanIntervalUnits;
+    params.window = kBleScanWindowUnits;
+
+    const int32_t duration = durationMs == 0 ? BLE_HS_FOREVER : (int32_t)durationMs;
+    int rc = ble_gap_disc(ownAddrType, duration, &params, valkyrieBleGapEvent, this);
+
+    if (rc != 0 && rc != BLE_HS_EALREADY && ble_gap_adv_active() && nimbleBluetooth && !nimbleBluetooth->isConnected()) {
+        const int stopRc = ble_gap_adv_stop();
+        if (stopRc == 0 || stopRc == BLE_HS_EALREADY) {
+            bleAdvertisingPausedForScan = stopRc == 0;
+            rc = ble_gap_disc(ownAddrType, duration, &params, valkyrieBleGapEvent, this);
+            if (rc != 0 && rc != BLE_HS_EALREADY)
+                resumeBleAdvertisingIfPaused();
+        }
+    }
+
+    if (rc == 0 || rc == BLE_HS_EALREADY)
+        return true;
+
+    LOG_WARN("Valkyrie: BLE discovery start failed rc=%d", rc);
+    return false;
+}
+
+void BleThreatDetectorModule::startScanWindow()
+{
+    if (!scanInitialised || scanActive)
+        return;
+
+    // Duration is in milliseconds for the NimBLE host API. Passing forever is
+    // only for heartbeat; duty windows should auto-complete.
+    if (startBleDiscovery((uint32_t)prefs.scanWindowSecs * 1000U, /*wantDuplicates=*/false)) {
         scanActive = true;
         hapticEmittedThisScanWindow = false;
         soundEmittedThisScanWindow = false;
@@ -273,11 +333,15 @@ void BleThreatDetectorModule::startScanWindow()
 
 void BleThreatDetectorModule::haltBleScan()
 {
-    if (scan && scanActive) {
-        scan->stop();
-        scan->clearResults();
+    if (scanActive) {
+        if (isBleDiscoveryActive()) {
+            const int rc = ble_gap_disc_cancel();
+            if (rc != 0 && rc != BLE_HS_EALREADY)
+                LOG_WARN("Valkyrie: BLE scan cancel failed rc=%d", rc);
+        }
         scanActive = false;
         hubBleWindowEndMs = millis();
+        resumeBleAdvertisingIfPaused();
         LOG_DEBUG("Valkyrie: BLE scan halted");
     }
 }
@@ -506,16 +570,14 @@ bool BleThreatDetectorModule::startHeartbeat(const uint8_t mac[6], ThreatType ty
     }
 
     initScanIfNeeded();
-    if (!scan || !scanInitialised) {
+    if (!scanInitialised) {
         heartbeatActive = false;
         heartbeatTargetType = ThreatType::None;
         return false;
     }
 
-    scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/true);
-    if (!scan->start(0, /*scanCompleteCB=*/nullptr, /*is_continue=*/false)) {
+    if (!startBleDiscovery(0, /*wantDuplicates=*/true)) {
         LOG_WARN("Valkyrie: heartbeat continuous scan start failed");
-        scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/false);
         heartbeatActive = false;
         heartbeatTargetType = ThreatType::None;
         return false;
@@ -549,9 +611,8 @@ void BleThreatDetectorModule::stopHeartbeat()
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
         valkyrie::endWifiHeartbeat();
 #endif
-    } else if (scan && scanInitialised) {
+    } else if (scanInitialised) {
         haltBleScan();
-        scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/false);
     }
     LOG_INFO("Valkyrie: heartbeat mode stopped");
     setIntervalFromNow(0);
@@ -601,7 +662,7 @@ HeartbeatSignalTier BleThreatDetectorModule::getHeartbeatSignalTier() const
     if (ageMs > kHeartbeatRssiStaleMs)
         return HeartbeatSignalTier::None;
 
-    // Tier from EMA + hysteresis (maintained in onAdvertisement).
+    // Tier from EMA + hysteresis (maintained in onBleAdvertisement).
     return static_cast<HeartbeatSignalTier>(heartbeatLatchedTierU8);
 }
 
@@ -618,7 +679,7 @@ int32_t BleThreatDetectorModule::runOnce()
 {
     static constexpr int32_t kWifiThreatPollMs = 20;
 
-    // Constant BLE scan / wardrive must keep BT/NimBLE alive across wait_bluetooth_secs;
+    // Constant BLE scan / wardrive must keep BT alive across wait_bluetooth_secs;
     // re-enter DARK to reset the DARK->LS timed transition. Same pattern as
     // MQTT.cpp's EVENT_CONTACT_FROM_PHONE keep-awake.
     const bool wantKeepAwake = wardriveActive ||
@@ -650,15 +711,15 @@ int32_t BleThreatDetectorModule::runOnce()
             return 30 * 1000;
         }
         initScanIfNeeded();
-        if (!scanInitialised || !scan) {
+        if (!scanInitialised) {
             return 5 * 1000;
         }
-        if (scanActive && scan->isScanning()) {
+        if (scanActive && isBleDiscoveryActive()) {
             return 400;
         }
         // Continuous scan dropped — restart (radio contention, LS edge, etc.).
-        scan->setAdvertisedDeviceCallbacks(&g_scanCallback, /*wantDuplicates=*/true);
-        if (scan->start(0, nullptr, false)) {
+        resumeBleAdvertisingIfPaused();
+        if (startBleDiscovery(0, /*wantDuplicates=*/true)) {
             scanActive = true;
             hapticEmittedThisScanWindow = false;
             scanStartedMs = millis();
@@ -684,12 +745,12 @@ int32_t BleThreatDetectorModule::runOnce()
         return kWifiThreatPollMs;
     }
 
-    // If a scan is in flight, check whether it's done. NimBLE 1.4.x
+    // If a scan is in flight, check whether it's done. The BLE stack
     // auto-stops after the duration we passed to start(), but we still
     // need to clear our scanActive flag so the next tick can launch a
     // fresh window.
     if (scanActive) {
-        if (scan && !scan->isScanning()) {
+        if (!isBleDiscoveryActive()) {
             haltBleScan();
             finalizeDutyThreatPass();
             LOG_DEBUG("Valkyrie: scan window complete (%u detections so far)", (unsigned)totalDetections);
@@ -705,7 +766,7 @@ int32_t BleThreatDetectorModule::runOnce()
         uint32_t elapsedMs = millis() - scanStartedMs;
         uint32_t hardCapMs = (uint32_t)prefs.scanWindowSecs * 1000U + 2000U;
         if (elapsedMs > hardCapMs) {
-            // Belt and braces: stop on our timer in case NimBLE
+            // Belt and braces: stop on our timer in case BLE
             // didn't honour the duration arg (rare, but cheaper to
             // be defensive than to debug a stuck scan).
             LOG_WARN("Valkyrie: scan exceeded hard cap, forcing stop");
@@ -765,7 +826,7 @@ int32_t BleThreatDetectorModule::runOnce()
 
     startScanWindow();
     if (scanActive) {
-        // Poll often while a window runs so we clear scanActive soon after NimBLE stops (callbacks still run).
+        // Poll often while a window runs so we clear scanActive soon after BLE stops (callbacks still run).
         return 1000;
     }
 
@@ -1023,35 +1084,41 @@ void BleThreatDetectorModule::reloadIgnoreList()
     ThreatIgnoreList::reloadCache();
 }
 
-void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
+void BleThreatDetectorModule::onBleGapEvent(struct ble_gap_event *event)
 {
-    if (!ad)
+    if (!event)
         return;
 
-    NimBLEAddress addr = ad->getAddress();
-    uint8_t mac[6] = {0};
-    const uint8_t *raw = addr.getNative();
-    if (raw) {
-        for (size_t i = 0; i < 6; ++i)
-            mac[i] = raw[5 - i];
+    if (event->type == BLE_GAP_EVENT_DISC) {
+        char name[32];
+        extractLocalName(event->disc.data, event->disc.length_data, name, sizeof(name));
+        onBleAdvertisement(event->disc.addr.val, event->disc.data, event->disc.length_data, name, event->disc.rssi);
     }
+}
+
+void BleThreatDetectorModule::onBleAdvertisement(const uint8_t nativeAddr[6], const uint8_t *payload, size_t payloadLen,
+                                                 const char *name, int32_t rssi)
+{
+    if (!nativeAddr)
+        return;
+
+    uint8_t mac[6] = {0};
+    for (size_t i = 0; i < 6; ++i)
+        mac[i] = nativeAddr[5 - i];
 
     if (heartbeatActive) {
         bool matched = (memcmp(mac, heartbeatTargetMac, 6) == 0);
-        if (!matched && raw)
-            matched = (memcmp(raw, heartbeatTargetMac, 6) == 0);
+        if (!matched)
+            matched = (memcmp(nativeAddr, heartbeatTargetMac, 6) == 0);
         if (!matched && heartbeatTargetType == ThreatType::Airtag) {
-            const uint8_t *payload = ad->getPayload();
-            const size_t payloadLen = ad->getPayloadLength();
-            const std::string nameStr = ad->getName();
-            const auto cls = classifyAdvertisement(payload, payloadLen, nameStr.c_str(), mac);
+            const auto cls = classifyAdvertisement(payload, payloadLen, name, mac);
             if (cls.type == ThreatType::Airtag)
                 matched = true;
         }
         if (!matched)
             return;
 
-        const int32_t rssiRaw = ad->getRSSI();
+        const int32_t rssiRaw = rssi;
         const uint32_t nowMs = millis();
         const uint32_t prevAdvMs = heartbeatLastAdvMs;
 
@@ -1074,13 +1141,7 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
         return;
     }
 
-    // NimBLE 1.4.3: getPayload() returns the raw advertisement bytes,
-    // getPayloadLength() the length. getName() returns std::string.
-    const uint8_t *payload = ad->getPayload();
-    size_t payloadLen = ad->getPayloadLength();
-    std::string nameStr = ad->getName();
-
-    auto cls = classifyAdvertisement(payload, payloadLen, nameStr.c_str(), mac);
+    auto cls = classifyAdvertisement(payload, payloadLen, name, mac);
     if (cls.type == ThreatType::None)
         return;
     if (!prefs.isThreatTypeEnabled(cls.type))
@@ -1103,8 +1164,7 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
                 return;
             if (!tryAdmitDetection(mac, cls.type))
                 return;
-            emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), ThreatSource::Ble, 0, true, gr.sightings,
-                          gr.distinctPlaces);
+            emitDetection(cls, mac, name, rssi, ThreatSource::Ble, 0, true, gr.sightings, gr.distinctPlaces);
             return;
         }
     }
@@ -1112,7 +1172,7 @@ void BleThreatDetectorModule::onAdvertisement(NimBLEAdvertisedDevice *ad)
     if (!tryAdmitDetection(mac, cls.type))
         return; // dedupe-throttled
 
-    emitDetection(cls, mac, nameStr.c_str(), ad->getRSSI(), ThreatSource::Ble, 0);
+    emitDetection(cls, mac, name, rssi, ThreatSource::Ble, 0);
 }
 
 } // namespace valkyrie
