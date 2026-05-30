@@ -7,11 +7,38 @@ namespace valkyrie
 
 HeartbeatSignalTier heartbeatRssiInstaTier(int32_t s)
 {
-    if (s >= -60)
+    if (s >= -48)
+        return HeartbeatSignalTier::VeryStrong;
+    if (s >= -58)
         return HeartbeatSignalTier::Strong;
-    if (s >= -75)
+    if (s >= -68)
+        return HeartbeatSignalTier::MediumStrong;
+    if (s >= -78)
         return HeartbeatSignalTier::Medium;
-    return HeartbeatSignalTier::Weak;
+    if (s >= -88)
+        return HeartbeatSignalTier::Weak;
+    return HeartbeatSignalTier::VeryWeak;
+}
+
+static void latchTier(volatile uint8_t *latchedTierU8, HeartbeatSignalTier tier)
+{
+    *latchedTierU8 = static_cast<uint8_t>(tier);
+}
+
+static bool isKnownTier(HeartbeatSignalTier tier)
+{
+    switch (tier) {
+    case HeartbeatSignalTier::None:
+    case HeartbeatSignalTier::VeryWeak:
+    case HeartbeatSignalTier::Weak:
+    case HeartbeatSignalTier::Medium:
+    case HeartbeatSignalTier::MediumStrong:
+    case HeartbeatSignalTier::Strong:
+    case HeartbeatSignalTier::VeryStrong:
+        return true;
+    default:
+        return false;
+    }
 }
 
 int32_t heartbeatRssiEmaNext(bool initOrStaleReset, int32_t prevSmoothed, int32_t rawDbm)
@@ -28,26 +55,43 @@ void heartbeatRssiApplyHysteresis(volatile uint8_t *latchedTierU8, int32_t s)
         return;
 
     auto T = static_cast<HeartbeatSignalTier>(*latchedTierU8);
-    if (T == HeartbeatSignalTier::None) {
-        *latchedTierU8 = static_cast<uint8_t>(heartbeatRssiInstaTier(s));
+    if (!isKnownTier(T) || T == HeartbeatSignalTier::None) {
+        latchTier(latchedTierU8, heartbeatRssiInstaTier(s));
         return;
     }
-    // Wider deadbands than nominal insta boundaries (-75 / -60) so ~15 dB fades
-    // do not constantly flip the latched tier when the EMA wiggles near an edge.
+    // Deadbands around nominal boundaries keep EMA wiggle from flipping adjacent tiers.
     switch (T) {
+    case HeartbeatSignalTier::VeryWeak:
+        if (s >= -84)
+            latchTier(latchedTierU8, HeartbeatSignalTier::Weak);
+        break;
     case HeartbeatSignalTier::Weak:
-        if (s >= -68)
-            *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
+        if (s < -92)
+            latchTier(latchedTierU8, HeartbeatSignalTier::VeryWeak);
+        else if (s >= -74)
+            latchTier(latchedTierU8, HeartbeatSignalTier::Medium);
         break;
     case HeartbeatSignalTier::Medium:
         if (s < -82)
-            *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Weak);
+            latchTier(latchedTierU8, HeartbeatSignalTier::Weak);
+        else if (s >= -64)
+            latchTier(latchedTierU8, HeartbeatSignalTier::MediumStrong);
+        break;
+    case HeartbeatSignalTier::MediumStrong:
+        if (s < -72)
+            latchTier(latchedTierU8, HeartbeatSignalTier::Medium);
         else if (s >= -54)
-            *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Strong);
+            latchTier(latchedTierU8, HeartbeatSignalTier::Strong);
         break;
     case HeartbeatSignalTier::Strong:
-        if (s < -66)
-            *latchedTierU8 = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
+        if (s < -62)
+            latchTier(latchedTierU8, HeartbeatSignalTier::MediumStrong);
+        else if (s >= -44)
+            latchTier(latchedTierU8, HeartbeatSignalTier::VeryStrong);
+        break;
+    case HeartbeatSignalTier::VeryStrong:
+        if (s < -52)
+            latchTier(latchedTierU8, HeartbeatSignalTier::Strong);
         break;
     default:
         break;

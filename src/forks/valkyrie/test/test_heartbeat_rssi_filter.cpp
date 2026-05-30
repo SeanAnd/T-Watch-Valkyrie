@@ -37,11 +37,17 @@ static HeartbeatSignalTier tierOf(uint8_t u)
 
 void test_insta_tier_boundaries()
 {
-    EXPECT(heartbeatRssiInstaTier(-59) == HeartbeatSignalTier::Strong, "insta -59 Strong");
-    EXPECT(heartbeatRssiInstaTier(-60) == HeartbeatSignalTier::Strong, "insta -60 Strong");
-    EXPECT(heartbeatRssiInstaTier(-61) == HeartbeatSignalTier::Medium, "insta -61 Medium");
-    EXPECT(heartbeatRssiInstaTier(-75) == HeartbeatSignalTier::Medium, "insta -75 Medium");
-    EXPECT(heartbeatRssiInstaTier(-76) == HeartbeatSignalTier::Weak, "insta -76 Weak");
+    EXPECT(heartbeatRssiInstaTier(-47) == HeartbeatSignalTier::VeryStrong, "insta -47 VeryStrong");
+    EXPECT(heartbeatRssiInstaTier(-48) == HeartbeatSignalTier::VeryStrong, "insta -48 VeryStrong");
+    EXPECT(heartbeatRssiInstaTier(-49) == HeartbeatSignalTier::Strong, "insta -49 Strong");
+    EXPECT(heartbeatRssiInstaTier(-58) == HeartbeatSignalTier::Strong, "insta -58 Strong");
+    EXPECT(heartbeatRssiInstaTier(-59) == HeartbeatSignalTier::MediumStrong, "insta -59 MediumStrong");
+    EXPECT(heartbeatRssiInstaTier(-68) == HeartbeatSignalTier::MediumStrong, "insta -68 MediumStrong");
+    EXPECT(heartbeatRssiInstaTier(-69) == HeartbeatSignalTier::Medium, "insta -69 Medium");
+    EXPECT(heartbeatRssiInstaTier(-78) == HeartbeatSignalTier::Medium, "insta -78 Medium");
+    EXPECT(heartbeatRssiInstaTier(-79) == HeartbeatSignalTier::Weak, "insta -79 Weak");
+    EXPECT(heartbeatRssiInstaTier(-88) == HeartbeatSignalTier::Weak, "insta -88 Weak");
+    EXPECT(heartbeatRssiInstaTier(-89) == HeartbeatSignalTier::VeryWeak, "insta -89 VeryWeak");
 }
 
 void test_ema_init_and_step()
@@ -53,40 +59,96 @@ void test_ema_init_and_step()
     EXPECT(b == -78, "EMA step matches alpha blend");
 }
 
-void test_hysteresis_weak_stays_until_promote_threshold()
+void test_hysteresis_very_weak_stays_until_promote_threshold()
 {
-    uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::Weak);
-    heartbeatRssiApplyHysteresis(&latched, -69);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Weak, "weak at -69 stays weak");
-    heartbeatRssiApplyHysteresis(&latched, -68);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "weak crosses to medium at -68");
+    uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::VeryWeak);
+    heartbeatRssiApplyHysteresis(&latched, -85);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::VeryWeak, "very weak at -85 stays very weak");
+    heartbeatRssiApplyHysteresis(&latched, -84);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Weak, "very weak crosses to weak at -84");
 }
 
-void test_hysteresis_medium_drops_below_82()
+void test_hysteresis_weak_adjacent_deadbands()
+{
+    uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::Weak);
+    heartbeatRssiApplyHysteresis(&latched, -92);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Weak, "weak at -92 stays weak");
+    heartbeatRssiApplyHysteresis(&latched, -93);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::VeryWeak, "weak drops very weak below -92");
+
+    latched = static_cast<uint8_t>(HeartbeatSignalTier::Weak);
+    heartbeatRssiApplyHysteresis(&latched, -75);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Weak, "weak at -75 stays weak");
+    heartbeatRssiApplyHysteresis(&latched, -74);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "weak crosses to medium at -74");
+}
+
+void test_hysteresis_medium_adjacent_deadbands()
 {
     uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
     heartbeatRssiApplyHysteresis(&latched, -82);
     EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "medium at -82 stays medium");
     heartbeatRssiApplyHysteresis(&latched, -83);
     EXPECT(tierOf(latched) == HeartbeatSignalTier::Weak, "medium drops weak below -82");
+
+    latched = static_cast<uint8_t>(HeartbeatSignalTier::Medium);
+    heartbeatRssiApplyHysteresis(&latched, -65);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "medium at -65 stays medium");
+    heartbeatRssiApplyHysteresis(&latched, -64);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "medium crosses to medium strong at -64");
 }
 
-void test_hysteresis_strong_deadband()
+void test_hysteresis_medium_strong_adjacent_deadbands()
+{
+    uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::MediumStrong);
+    heartbeatRssiApplyHysteresis(&latched, -72);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "medium strong at -72 stays medium strong");
+    heartbeatRssiApplyHysteresis(&latched, -73);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "medium strong drops medium below -72");
+
+    latched = static_cast<uint8_t>(HeartbeatSignalTier::MediumStrong);
+    heartbeatRssiApplyHysteresis(&latched, -55);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "medium strong at -55 stays medium strong");
+    heartbeatRssiApplyHysteresis(&latched, -54);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "medium strong crosses to strong at -54");
+}
+
+void test_hysteresis_strong_adjacent_deadbands()
 {
     uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::Strong);
-    heartbeatRssiApplyHysteresis(&latched, -65);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "strong holds at -65");
-    heartbeatRssiApplyHysteresis(&latched, -66);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "strong holds at -66 (leave threshold is s < -66)");
-    heartbeatRssiApplyHysteresis(&latched, -67);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "strong drops at -67");
+    heartbeatRssiApplyHysteresis(&latched, -62);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "strong at -62 stays strong");
+    heartbeatRssiApplyHysteresis(&latched, -63);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "strong drops medium strong below -62");
+
+    latched = static_cast<uint8_t>(HeartbeatSignalTier::Strong);
+    heartbeatRssiApplyHysteresis(&latched, -45);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "strong at -45 stays strong");
+    heartbeatRssiApplyHysteresis(&latched, -44);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::VeryStrong, "strong crosses to very strong at -44");
+}
+
+void test_hysteresis_very_strong_deadband()
+{
+    uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::VeryStrong);
+    heartbeatRssiApplyHysteresis(&latched, -52);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::VeryStrong, "very strong holds at -52");
+    heartbeatRssiApplyHysteresis(&latched, -53);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::Strong, "very strong drops at -53");
+}
+
+void test_hysteresis_unknown_seeds_insta()
+{
+    uint8_t latched = 255;
+    heartbeatRssiApplyHysteresis(&latched, -68);
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "unknown seeds to insta MediumStrong at -68");
 }
 
 void test_hysteresis_none_seeds_insta()
 {
     uint8_t latched = static_cast<uint8_t>(HeartbeatSignalTier::None);
     heartbeatRssiApplyHysteresis(&latched, -63);
-    EXPECT(tierOf(latched) == HeartbeatSignalTier::Medium, "None seeds to insta Medium at -63");
+    EXPECT(tierOf(latched) == HeartbeatSignalTier::MediumStrong, "None seeds to insta MediumStrong at -63");
 }
 
 /** Mirrors BleThreatDetectorModule heartbeat RSSI update order (ms gaps, not wall clock). */
@@ -119,16 +181,16 @@ struct HeartbeatRssiPipeline {
 void test_pipeline_raw_chatter_near_boundary_stays_medium()
 {
     HeartbeatRssiPipeline p;
-    // Start medium-ish so EMA lives near -60 boundary.
-    p.packet(-65, 1);
+    // Start medium-ish so EMA lives near the weak/medium boundary.
+    p.packet(-76, 1);
     EXPECT(tierOf(p.latched) == HeartbeatSignalTier::Medium, "start medium");
 
     HeartbeatSignalTier first = tierOf(p.latched);
     for (int i = 0; i < 40; ++i) {
-        p.packet(-59, 5);
-        p.packet(-61, 5);
+        p.packet(-77, 5);
+        p.packet(-79, 5);
     }
-    EXPECT(tierOf(p.latched) == first, "chatter -59/-61 should not flip tier vs initial");
+    EXPECT(tierOf(p.latched) == first, "chatter -77/-79 should not flip tier vs initial");
     EXPECT(tierOf(p.latched) == HeartbeatSignalTier::Medium, "expect remain Medium after EMA+hysteresis");
 }
 
@@ -136,7 +198,7 @@ void test_pipeline_stale_gap_reinits_insta()
 {
     HeartbeatRssiPipeline p;
     p.packet(-90, 1);
-    EXPECT(tierOf(p.latched) == HeartbeatSignalTier::Weak, "weak start");
+    EXPECT(tierOf(p.latched) == HeartbeatSignalTier::VeryWeak, "very weak start");
 
     const uint32_t gap = kHeartbeatRssiStaleMs + 1;
     p.packet(-55, gap);
@@ -150,9 +212,13 @@ int main()
 {
     test_insta_tier_boundaries();
     test_ema_init_and_step();
-    test_hysteresis_weak_stays_until_promote_threshold();
-    test_hysteresis_medium_drops_below_82();
-    test_hysteresis_strong_deadband();
+    test_hysteresis_very_weak_stays_until_promote_threshold();
+    test_hysteresis_weak_adjacent_deadbands();
+    test_hysteresis_medium_adjacent_deadbands();
+    test_hysteresis_medium_strong_adjacent_deadbands();
+    test_hysteresis_strong_adjacent_deadbands();
+    test_hysteresis_very_strong_deadband();
+    test_hysteresis_unknown_seeds_insta();
     test_hysteresis_none_seeds_insta();
     test_pipeline_raw_chatter_near_boundary_stays_medium();
     test_pipeline_stale_gap_reinits_insta();

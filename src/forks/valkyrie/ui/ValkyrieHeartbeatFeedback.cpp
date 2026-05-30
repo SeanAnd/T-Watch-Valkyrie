@@ -8,6 +8,7 @@
 #include "concurrency/OSThread.h"
 #include "configuration.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 #include "modules/ExternalNotificationModule.h"
 #include "PowerFSM.h"
 
@@ -32,20 +33,21 @@ HeartbeatFeedbackThread *g_feedback = nullptr;
 uint32_t g_lastWakePokeMs = 0;
 uint32_t g_lastPulseMs = 0;
 
-static void pulseHaptic()
+static void pulseHaptic(HeartbeatSignalTier tier)
 {
 #if defined(HAS_DRV2605) && defined(T_WATCH_S3)
     if (externalNotificationModule && externalNotificationModule->nagging())
         return;
-    drv.setWaveform(0, 16);
+    uint8_t effect = 1;
+    if (tier == HeartbeatSignalTier::VeryWeak)
+        effect = 3;
+    else if (tier == HeartbeatSignalTier::Weak)
+        effect = 2;
+    drv.setWaveform(0, effect);
     drv.setWaveform(1, 0);
-    drv.setWaveform(2, 16);
-    drv.setWaveform(3, 0);
-    drv.setWaveform(4, 16);
-    drv.setWaveform(5, 0);
-    drv.setWaveform(6, 16);
-    drv.setWaveform(7, 0);
     drv.go();
+#else
+    (void)tier;
 #endif
 }
 
@@ -67,10 +69,9 @@ int32_t HeartbeatFeedbackThread::runOnce()
         return 60 * 1000;
     }
 
-    const uint32_t now = millis();
-    if (now - g_lastWakePokeMs >= 8000) {
+    if (g_lastWakePokeMs == 0 || !Throttle::isWithinTimespanMs(g_lastWakePokeMs, 8000)) {
         powerFSM.trigger(EVENT_INPUT);
-        g_lastWakePokeMs = now;
+        g_lastWakePokeMs = millis();
     }
 
     HeartbeatSignalTier tier = bleThreatDetector->getHeartbeatSignalTier();
@@ -78,19 +79,16 @@ int32_t HeartbeatFeedbackThread::runOnce()
         return 200;
     }
 
-    // Slower cadence on weaker tiers so haptic is not frantic (Strong stays quickest).
-    uint32_t periodMs = 1200;
-    if (tier == HeartbeatSignalTier::Medium)
-        periodMs = 900;
-    else if (tier == HeartbeatSignalTier::Strong)
-        periodMs = 380;
+    const uint32_t periodMs = heartbeatTierPulsePeriodMs(tier);
+    if (periodMs == 0)
+        return 200;
 
-    if (g_lastPulseMs != 0 && (now - g_lastPulseMs) < periodMs) {
+    if (g_lastPulseMs != 0 && Throttle::isWithinTimespanMs(g_lastPulseMs, periodMs)) {
         return 50;
     }
-    g_lastPulseMs = now;
+    g_lastPulseMs = millis();
 
-    pulseHaptic();
+    pulseHaptic(tier);
     maybeBeep();
     return 50;
 }

@@ -46,6 +46,12 @@ static const uint16_t *const kLoopFrames[6] = {
     heartbeatLoop6_rgb565,
 };
 
+struct LoopPulsePattern {
+    uint8_t firstFrame;
+    uint8_t lastFrame;
+    uint32_t frameMs;
+};
+
 enum class UiPhase : uint8_t { Intro, Steady, Outro, Dead };
 
 UiPhase s_phase = UiPhase::Dead;
@@ -70,6 +76,24 @@ void drawRgb565SpriteScaled(OLEDDisplay *display, int16_t originX, int16_t origi
             display->setColor(WHITE);
             display->setPixel(originX + (int16_t)dcol, originY + (int16_t)drow);
         }
+    }
+}
+
+LoopPulsePattern loopPulsePatternForTier(HeartbeatSignalTier tier)
+{
+    switch (tier) {
+    case HeartbeatSignalTier::VeryWeak:
+    case HeartbeatSignalTier::Weak:
+        return {0, 1, 70};
+    case HeartbeatSignalTier::Medium:
+    case HeartbeatSignalTier::MediumStrong:
+        return {2, 3, 55};
+    case HeartbeatSignalTier::Strong:
+    case HeartbeatSignalTier::VeryStrong:
+        return {4, 5, 40};
+    case HeartbeatSignalTier::None:
+    default:
+        return {0, 0, 0};
     }
 }
 
@@ -139,21 +163,22 @@ static const uint16_t *pickPixels(uint32_t nowMs)
         return kLoopFrames[0];
     }
 
-    unsigned first = 0, last = 5;
-    uint32_t frameMs = 110;
-    if (tier == HeartbeatSignalTier::Medium) {
-        first = 2;
-        last = 5;
-        frameMs = 85;
-    } else if (tier == HeartbeatSignalTier::Strong) {
-        first = 4;
-        last = 5;
-        frameMs = 55;
+    const LoopPulsePattern pattern = loopPulsePatternForTier(tier);
+    const uint32_t cycleMs = heartbeatTierPulsePeriodMs(tier);
+    if (pattern.frameMs == 0 || cycleMs == 0) {
+        return kLoopFrames[0];
     }
 
-    const uint32_t span = (uint32_t)(last - first + 1);
-    const uint32_t t = (nowMs - s_steadyAnimMs) / frameMs;
-    const unsigned idx = (unsigned)(first + (t % span));
+    const uint32_t span = (uint32_t)(pattern.lastFrame - pattern.firstFrame + 1);
+    const uint32_t pulseMs = span * pattern.frameMs;
+    const uint32_t inCycle = (nowMs - s_steadyAnimMs) % cycleMs;
+    if (inCycle >= pulseMs) {
+        return kLoopFrames[0];
+    }
+
+    unsigned idx = (unsigned)(pattern.firstFrame + (inCycle / pattern.frameMs));
+    if (idx > pattern.lastFrame)
+        idx = pattern.lastFrame;
     return kLoopFrames[idx];
 }
 
@@ -207,7 +232,7 @@ void drawHeartbeatFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     }
 
     char strengthLine[40];
-    snprintf(strengthLine, sizeof(strengthLine), "Signal strength: %s", heartbeatTierLabel(snapTier));
+    snprintf(strengthLine, sizeof(strengthLine), "Strength: %s", heartbeatTierLabel(snapTier));
 
     const int lineStep = tp[2] - tp[1];
     const int spriteBottom = (int)spriteTop + (int)kDestH;
