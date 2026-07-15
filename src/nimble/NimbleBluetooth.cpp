@@ -14,6 +14,11 @@
 #include <atomic>
 #include <mutex>
 
+#if defined(VALKYRIE_FORK) && !defined(NIMBLE_TWO)
+#include "nimble/nimble/host/include/host/ble_store.h"
+#include <nvs.h>
+#endif
+
 #ifdef NIMBLE_TWO
 #include "NimBLEAdvertising.h"
 #include "NimBLEExtAdvertising.h"
@@ -33,6 +38,53 @@ namespace
 constexpr uint16_t kPreferredBleMtu = 517;
 constexpr uint16_t kPreferredBleTxOctets = 251;
 constexpr uint16_t kPreferredBleTxTimeUs = (kPreferredBleTxOctets + 14) * 8;
+} // namespace
+#endif
+
+#if defined(VALKYRIE_FORK) && !defined(NIMBLE_TWO)
+namespace
+{
+// NimBLE 2.x and 1.4 persist different-sized bond records under the same NVS
+// keys. NimBLE 1.4 trusts the stored blob size and can overwrite its stack when
+// reading a 2.x record. Detect that downgrade case before the host starts and
+// discard only the incompatible BLE bonds.
+void sanitizeLegacyNimbleBondStore()
+{
+    nvs_handle_t handle;
+    if (nvs_open("nimble_bond", NVS_READWRITE, &handle) != ESP_OK)
+        return;
+
+    struct BondRecordType {
+        const char *prefix;
+        size_t expectedSize;
+    } recordTypes[] = {{"our_sec", sizeof(ble_store_value_sec)},
+                       {"peer_sec", sizeof(ble_store_value_sec)},
+                       {"cccd_sec", sizeof(ble_store_value_cccd)}};
+
+    bool incompatible = false;
+    char key[16];
+    for (const auto &recordType : recordTypes) {
+        for (unsigned index = 1; index <= 32; ++index) {
+            snprintf(key, sizeof(key), "%s_%u", recordType.prefix, index);
+            size_t storedSize = 0;
+            const esp_err_t err = nvs_get_blob(handle, key, nullptr, &storedSize);
+            if (err == ESP_OK && storedSize != recordType.expectedSize) {
+                LOG_WARN("Valkyrie: clearing incompatible BLE bonds (%s is %u bytes, expected %u)", key,
+                         static_cast<unsigned>(storedSize), static_cast<unsigned>(recordType.expectedSize));
+                incompatible = true;
+                break;
+            }
+        }
+        if (incompatible)
+            break;
+    }
+
+    if (incompatible) {
+        nvs_erase_all(handle);
+        nvs_commit(handle);
+    }
+    nvs_close(handle);
+}
 } // namespace
 #endif
 
@@ -824,6 +876,10 @@ void NimbleBluetooth::setup()
     // NimbleBluetooth::clearBonds();
 
     LOG_INFO("Init the NimBLE bluetooth module");
+
+#if defined(VALKYRIE_FORK) && !defined(NIMBLE_TWO)
+    sanitizeLegacyNimbleBondStore();
+#endif
 
     NimBLEDevice::init(getDeviceName());
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
