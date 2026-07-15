@@ -23,9 +23,9 @@
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
 
-#include <host/ble_gap.h>
-#include <host/ble_hs.h>
-#include <host/ble_hs_id.h>
+#include "nimble/nimble/host/include/host/ble_gap.h"
+#include "nimble/nimble/host/include/host/ble_hs.h"
+#include "nimble/nimble/host/include/host/ble_hs_id.h"
 
 #include <cstdint>
 #include <cstdio>
