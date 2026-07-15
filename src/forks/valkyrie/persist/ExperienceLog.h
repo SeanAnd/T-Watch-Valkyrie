@@ -37,7 +37,7 @@ size_t count();
 /// Read entry by newest-first index (0 = most recent). Returns false when out of range.
 bool readRecent(size_t recentIndex, Entry *out);
 
-/// Convenience formatter for the watch menu, e.g. "+24 Flock threat (12s)".
+/// Convenience formatter for the watch menu, e.g. "+24 Flock threat (< 1 min)".
 bool formatRecentLine(size_t recentIndex, char *out, size_t outCap);
 
 } // namespace ExperienceLog

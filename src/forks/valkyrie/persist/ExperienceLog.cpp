@@ -49,6 +49,34 @@ const char *sourceLabel(Source source)
     }
 }
 
+void formatAge(uint32_t ageSecs, char *out, size_t outCap)
+{
+    if (!out || outCap == 0)
+        return;
+
+    if (ageSecs < 60U) {
+        snprintf(out, outCap, "< 1 min");
+        return;
+    }
+
+    const uint32_t ageMins = ageSecs / 60U;
+    if (ageMins < 60U) {
+        snprintf(out, outCap, "%u min", (unsigned)ageMins);
+        return;
+    }
+
+    const uint32_t ageHours = ageMins / 60U;
+    if (ageHours < 24U) {
+        snprintf(out, outCap, "%u hr", (unsigned)ageHours);
+        return;
+    }
+
+    uint32_t ageDays = ageHours / 24U;
+    if (ageDays > 999U)
+        ageDays = 999U;
+    snprintf(out, outCap, "%u days", (unsigned)ageDays);
+}
+
 } // namespace
 
 void record(Source source, uint32_t amount, const char *detail)
@@ -124,10 +152,9 @@ bool formatRecentLine(size_t recentIndex, char *out, size_t outCap)
     if (!readRecent(recentIndex, &e))
         return false;
 
-    uint32_t age = e.ageSecs;
-    if (age > 9999U)
-        age = 9999U;
-    snprintf(out, outCap, "+%u %s (%us)", (unsigned)e.amount, e.detail, (unsigned)age);
+    char age[12];
+    formatAge(e.ageSecs, age, sizeof(age));
+    snprintf(out, outCap, "+%u %s (%s)", (unsigned)e.amount, e.detail, age);
     return true;
 }
 
