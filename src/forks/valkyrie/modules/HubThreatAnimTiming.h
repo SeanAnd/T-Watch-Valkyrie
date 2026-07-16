@@ -5,8 +5,10 @@
 namespace valkyrie
 {
 
-/// Duration (ms) of the BLE “start scan” strip played in reverse before the Wi‑Fi phase in the hub sprite.
-/// Must match `ValkyrieHubFrame.cpp`: `kBleStartFrameCount * kFrameMsIntro` (6 × 160).
-constexpr uint32_t kHubBleScanStripOutroMs = 6 * 160;
+constexpr unsigned kHubScanIntroFrameCount = 6;
+constexpr uint32_t kHubScanIntroFrameMs = 480;
+
+/// Duration of the scan strip used to synchronize the detector and hub animation.
+constexpr uint32_t kHubBleScanStripOutroMs = kHubScanIntroFrameCount * kHubScanIntroFrameMs;
 
 } // namespace valkyrie

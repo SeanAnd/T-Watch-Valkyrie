@@ -8,6 +8,9 @@
 #include "ValkyrieWardriveInput.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
+#if defined(VALKYRIE_TFT_RGB565)
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/draw/MenuHandler.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
@@ -22,9 +25,9 @@ namespace
 {
 
 constexpr unsigned kIntroFrameCount = 5;
-constexpr uint32_t kIntroFrameMs = 120;
+constexpr uint32_t kIntroFrameMs = 360;
 /// Intro advances one cel per redraw when due so long gaps between paints never skip frames.
-constexpr uint32_t kIdleHoldMs = 600;
+constexpr uint32_t kIdleHoldMs = 1500;
 /// Held before start sequence (wardriveIdle.png).
 
 constexpr unsigned kLoopFrameCount = 3;
@@ -58,6 +61,9 @@ bool s_finalStatsCaptured = false;
 
 void drawRgb565SpriteScaled(OLEDDisplay *display, int16_t originX, int16_t originY, const uint16_t *pixels)
 {
+#if defined(VALKYRIE_TFT_RGB565)
+    static_cast<TFTDisplay *>(display)->drawRGB565Sprite(originX, originY, pixels, kAssetW, kAssetH, kDestW, kDestH);
+#else
     for (uint16_t drow = 0; drow < kDestH; drow++) {
         const uint16_t srow = (uint16_t)(((uint32_t)drow * kAssetH) / kDestH);
         for (uint16_t dcol = 0; dcol < kDestW; dcol++) {
@@ -75,6 +81,7 @@ void drawRgb565SpriteScaled(OLEDDisplay *display, int16_t originX, int16_t origi
             display->setPixel(originX + (int16_t)dcol, originY + (int16_t)drow);
         }
     }
+#endif
 }
 
 static void finishWardriveUiExit()
@@ -152,11 +159,11 @@ static const uint16_t *pickPixels(uint32_t nowMs)
 
     // Cycle all wardrive loop frames; speed up slightly once scans produce APs.
     uint32_t raw = wardriveSession ? wardriveSession->stats().apsSeenTotalRaw : 0;
-    uint32_t frameMs = 130;
+    uint32_t frameMs = 390;
     if (raw > 0)
-        frameMs = 90;
+        frameMs = 270;
     if (raw > 20)
-        frameMs = 60;
+        frameMs = 180;
 
     const uint32_t t = (nowMs - s_steadyAnimMs) / frameMs;
     const unsigned idx = (unsigned)(t % kLoopFrameCount);

@@ -6,6 +6,9 @@
 #include "NotificationRenderer.h"
 #include "UIRenderer.h"
 #include "graphics/ScreenFonts.h"
+#if defined(VALKYRIE_TFT_RGB565)
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
@@ -701,6 +704,10 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
         display->drawRect(scrollBarX, scrollBarY, scrollBarWidth, scrollBarHeight);
         display->fillRect(scrollBarX + 1, indicatorY, scrollBarWidth - 2, indicatorHeight);
     }
+
+#if defined(VALKYRIE_TFT_RGB565)
+    static_cast<TFTDisplay *>(display)->drawMonochromeOverlay(boxLeft - 2, boxTop - 2, boxWidth + 4, boxHeight + 4);
+#endif
 }
 
 /// Draw the last text message we received

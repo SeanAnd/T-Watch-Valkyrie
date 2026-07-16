@@ -1000,6 +1000,15 @@ int32_t Power::runOnce()
             powerFSM.trigger(EVENT_POWER_CONNECTED);
         }
 
+#ifdef PMU_POWER_BUTTON_IS_CANCEL
+        // cancel action also turns the screen on and off.
+        if (PMU->isPekeyShortPressIrq()) {
+            LOG_INFO("Input: Corona Button Click");
+            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_CANCEL, .kbchar = 0, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
+        }
+#endif
+
         /*
         Other things we could check if we cared...
 

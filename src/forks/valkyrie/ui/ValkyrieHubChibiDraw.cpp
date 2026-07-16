@@ -7,6 +7,9 @@
 #include "../modules/HubThreatAnimTiming.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
+#if defined(VALKYRIE_TFT_RGB565)
+#include "graphics/TFTDisplay.h"
+#endif
 #include "sprites/idle_rgb565.h"
 #include "sprites/scan_ble_loop_rgb565.h"
 #include "sprites/scan_wifi_loop_rgb565.h"
@@ -18,10 +21,10 @@
 namespace
 {
 
-constexpr unsigned kBleStartFrameCount = 6;
+constexpr unsigned kBleStartFrameCount = valkyrie::kHubScanIntroFrameCount;
 constexpr unsigned kLoopFrameCount = 3;
-constexpr uint32_t kFrameMsIntro = 160;
-constexpr uint32_t kFrameMsLoop = 80;
+constexpr uint32_t kFrameMsIntro = valkyrie::kHubScanIntroFrameMs;
+constexpr uint32_t kFrameMsLoop = 240;
 constexpr uint32_t kIntroTotalMs = valkyrie::kHubBleScanStripOutroMs;
 constexpr uint32_t kOutroTotalMs = valkyrie::kHubBleScanStripOutroMs;
 
@@ -59,8 +62,8 @@ static const uint16_t *const kScanWifiLoopFrames[kLoopFrameCount] = {
 
 constexpr unsigned kSleepStartFrameCount = 6;
 constexpr unsigned kSleepLoopFrameCount = 3;
-constexpr uint32_t kFrameMsSleepIntro = 160;
-constexpr uint32_t kFrameMsSleepLoop = 80;
+constexpr uint32_t kFrameMsSleepIntro = 240;
+constexpr uint32_t kFrameMsSleepLoop = 240;
 constexpr uint32_t kSleepIntroTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
 constexpr uint32_t kWakeReverseTotalMs = kSleepStartFrameCount * kFrameMsSleepIntro;
 
@@ -89,6 +92,9 @@ static void drawRgb565SpriteHubScaledTo(OLEDDisplay *display, int16_t originX, i
 {
     if (destW == 0 || destH == 0)
         return;
+#if defined(VALKYRIE_TFT_RGB565)
+    static_cast<TFTDisplay *>(display)->drawRGB565Sprite(originX, originY, pixels, kAssetW, kAssetH, destW, destH);
+#else
     for (uint16_t drow = 0; drow < destH; drow++) {
         const uint16_t srow = (uint16_t)(((uint32_t)drow * kAssetH) / destH);
         for (uint16_t dcol = 0; dcol < destW; dcol++) {
@@ -106,6 +112,7 @@ static void drawRgb565SpriteHubScaledTo(OLEDDisplay *display, int16_t originX, i
             display->setPixel(originX + (int16_t)dcol, originY + (int16_t)drow);
         }
     }
+#endif
 }
 
 static void drawRgb565SpriteHubScaled(OLEDDisplay *display, int16_t originX, int16_t originY, const uint16_t *pixels)

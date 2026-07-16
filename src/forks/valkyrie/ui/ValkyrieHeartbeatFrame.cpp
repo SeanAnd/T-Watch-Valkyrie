@@ -11,6 +11,9 @@
 #include "ValkyrieThreatLogEntryMenu.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
+#if defined(VALKYRIE_TFT_RGB565)
+#include "graphics/TFTDisplay.h"
+#endif
 #include "sprites/heartbeat_loop_rgb565.h"
 #include "sprites/start_heartbeat_scan_rgb565.h"
 
@@ -21,7 +24,7 @@ namespace
 {
 
 constexpr unsigned kIntroFrameCount = 5;
-constexpr uint32_t kIntroFrameMs = 120;
+constexpr uint32_t kIntroFrameMs = 300;
 constexpr uint32_t kIntroTotalMs = kIntroFrameCount * kIntroFrameMs;
 
 constexpr uint16_t kAssetW = HEARTBEAT_LOOP_WIDTH;
@@ -60,6 +63,9 @@ uint32_t s_steadyAnimMs = 0;
 
 void drawRgb565SpriteScaled(OLEDDisplay *display, int16_t originX, int16_t originY, const uint16_t *pixels)
 {
+#if defined(VALKYRIE_TFT_RGB565)
+    static_cast<TFTDisplay *>(display)->drawRGB565Sprite(originX, originY, pixels, kAssetW, kAssetH, kDestW, kDestH);
+#else
     for (uint16_t drow = 0; drow < kDestH; drow++) {
         const uint16_t srow = (uint16_t)(((uint32_t)drow * kAssetH) / kDestH);
         for (uint16_t dcol = 0; dcol < kDestW; dcol++) {
@@ -77,6 +83,7 @@ void drawRgb565SpriteScaled(OLEDDisplay *display, int16_t originX, int16_t origi
             display->setPixel(originX + (int16_t)dcol, originY + (int16_t)drow);
         }
     }
+#endif
 }
 
 LoopPulsePattern loopPulsePatternForTier(HeartbeatSignalTier tier)
@@ -84,13 +91,13 @@ LoopPulsePattern loopPulsePatternForTier(HeartbeatSignalTier tier)
     switch (tier) {
     case HeartbeatSignalTier::VeryWeak:
     case HeartbeatSignalTier::Weak:
-        return {0, 1, 70};
+        return {0, 1, 175};
     case HeartbeatSignalTier::Medium:
     case HeartbeatSignalTier::MediumStrong:
-        return {2, 3, 55};
+        return {2, 3, 140};
     case HeartbeatSignalTier::Strong:
     case HeartbeatSignalTier::VeryStrong:
-        return {4, 5, 40};
+        return {4, 5, 100};
     case HeartbeatSignalTier::None:
     default:
         return {0, 0, 0};

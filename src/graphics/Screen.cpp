@@ -1017,6 +1017,13 @@ int32_t Screen::runOnce()
     // otherwise that breaks animations.
 
     uint32_t desiredFramerate = IDLE_FRAMERATE;
+#if defined(VALKYRIE_FORK)
+    const uint8_t activeFrame = ui->getUiState()->currentFrame;
+    if (!showingNormalScreen ||
+        (framesetInfo.positions.valkyrie != 255 && activeFrame == framesetInfo.positions.valkyrie)) {
+        desiredFramerate = VALKYRIE_ACTIVE_FRAMERATE;
+    }
+#endif
 #if HAS_GPS && !defined(USE_EINK)
     if (showingNormalScreen && hasCompass) {
         const uint8_t currentFrame = ui->getUiState()->currentFrame;

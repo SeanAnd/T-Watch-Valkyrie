@@ -31,17 +31,17 @@ uint32_t heartbeatTierPulsePeriodMs(HeartbeatSignalTier t)
 {
     switch (t) {
     case HeartbeatSignalTier::VeryWeak:
-        return 2200;
+        return 5500;
     case HeartbeatSignalTier::Weak:
-        return 1600;
+        return 4000;
     case HeartbeatSignalTier::Medium:
-        return 1100;
+        return 2750;
     case HeartbeatSignalTier::MediumStrong:
-        return 760;
+        return 1900;
     case HeartbeatSignalTier::Strong:
-        return 460;
+        return 1150;
     case HeartbeatSignalTier::VeryStrong:
-        return 260;
+        return 650;
     case HeartbeatSignalTier::None:
     default:
         return 0;

@@ -44,6 +44,16 @@ class TFTDisplay : public OLEDDisplay
      */
     void setDetected(uint8_t detected);
 
+#if defined(VALKYRIE_TFT_RGB565)
+    /// Registers the single Valkyrie RGB565 layer for the next display flush.
+    /// RGB565 value zero is transparent; a later registration replaces the pending layer.
+    void drawRGB565Sprite(int16_t x, int16_t y, const uint16_t *pixels, uint16_t sourceWidth, uint16_t sourceHeight,
+                          uint16_t destWidth, uint16_t destHeight);
+
+    /// Redraws a monochrome UI rectangle after RGB sprites, providing a foreground overlay layer.
+    void drawMonochromeOverlay(int16_t x, int16_t y, uint16_t width, uint16_t height);
+#endif
+
     /**
      * This is normally managed entirely by TFTDisplay, but some rare applications (heltec tracker) might need to replace the
      * default GPIO behavior with something a bit more complex.
@@ -63,4 +73,28 @@ class TFTDisplay : public OLEDDisplay
     virtual bool connect() override;
 
     uint16_t *linePixelBuffer = nullptr;
+
+#if defined(VALKYRIE_TFT_RGB565)
+    struct RGB565Sprite {
+        int16_t x = 0;
+        int16_t y = 0;
+        const uint16_t *pixels = nullptr;
+        uint16_t sourceWidth = 0;
+        uint16_t sourceHeight = 0;
+        uint16_t destWidth = 0;
+        uint16_t destHeight = 0;
+        bool valid = false;
+    };
+
+    RGB565Sprite pendingSprite;
+    RGB565Sprite displayedSprite;
+
+    struct OverlayRect {
+        int16_t x = 0;
+        int16_t y = 0;
+        uint16_t width = 0;
+        uint16_t height = 0;
+        bool valid = false;
+    } pendingOverlay;
+#endif
 };

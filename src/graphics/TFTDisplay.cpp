@@ -1,5 +1,9 @@
 #include "configuration.h"
 #include "main.h"
+#if defined(VALKYRIE_TFT_RGB565)
+#include <algorithm>
+#include "forks/valkyrie/ui/ValkyrieTFTPalette.h"
+#endif
 #if USE_TFTDISPLAY
 
 #if ARCH_PORTDUINO
@@ -1202,6 +1206,20 @@ TFTDisplay::~TFTDisplay()
     }
 }
 
+#if defined(VALKYRIE_TFT_RGB565)
+void TFTDisplay::drawRGB565Sprite(int16_t x, int16_t y, const uint16_t *pixels, uint16_t sourceWidth,
+                                 uint16_t sourceHeight, uint16_t destWidth, uint16_t destHeight)
+{
+    pendingSprite = {x, y, pixels, sourceWidth, sourceHeight, destWidth, destHeight,
+                     pixels != nullptr && sourceWidth != 0 && sourceHeight != 0 && destWidth != 0 && destHeight != 0};
+}
+
+void TFTDisplay::drawMonochromeOverlay(int16_t x, int16_t y, uint16_t width, uint16_t height)
+{
+    pendingOverlay = {x, y, width, height, width != 0 && height != 0};
+}
+#endif
+
 // Write the buffer to the display memory
 void TFTDisplay::display(bool fromBlank)
 {
@@ -1222,6 +1240,15 @@ void TFTDisplay::display(bool fromBlank)
     // Store colors byte-reversed so that TFT_eSPI doesn't have to swap bytes in a separate step
     colorTftMesh = __builtin_bswap16(TFT_MESH);
     colorTftBlack = __builtin_bswap16(TFT_BLACK);
+
+    const auto foregroundForRow = [this, colorTftMesh](uint32_t row) {
+#if defined(VALKYRIE_TFT_RGB565)
+        return __builtin_bswap16(valkyrie::tftForegroundForRow(row, displayHeight));
+#else
+        (void)row;
+        return colorTftMesh;
+#endif
+    };
 
     y = 0;
     while (y < displayHeight) {
@@ -1267,14 +1294,15 @@ void TFTDisplay::display(bool fromBlank)
         if (x_FirstPixelUpdate < displayWidth) {
 
             // Quickly write out the first changed pixel (saves another array lookup)
-            linePixelBuffer[x_FirstPixelUpdate] = isset ? colorTftMesh : colorTftBlack;
+            const uint16_t foreground = foregroundForRow(y);
+            linePixelBuffer[x_FirstPixelUpdate] = isset ? foreground : colorTftBlack;
             x_LastPixelUpdate = x_FirstPixelUpdate;
 
             // Step 3: copy all remaining pixels in this row into the pixel line buffer,
             // while also recording the last pixel in the row that needs updating
             for (x = x_FirstPixelUpdate + 1; x < displayWidth; x++) {
                 isset = buffer[x + y_byteIndex] & y_byteMask;
-                linePixelBuffer[x] = isset ? colorTftMesh : colorTftBlack;
+                linePixelBuffer[x] = isset ? foreground : colorTftBlack;
 
                 if (!fromBlank) {
                     dblbuf_isset = buffer_back[x + y_byteIndex] & y_byteMask;
@@ -1301,6 +1329,72 @@ void TFTDisplay::display(bool fromBlank)
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
         memcpy(buffer_back, buffer, displayBufferSize);
+
+#if defined(VALKYRIE_TFT_RGB565)
+    if (displayedSprite.valid || pendingSprite.valid) {
+        int32_t left = displayWidth;
+        int32_t top = displayHeight;
+        int32_t right = 0;
+        int32_t bottom = 0;
+        const RGB565Sprite sprites[] = {displayedSprite, pendingSprite};
+        for (const auto &sprite : sprites) {
+            if (!sprite.valid)
+                continue;
+            left = std::max<int32_t>(0, std::min<int32_t>(left, sprite.x));
+            top = std::max<int32_t>(0, std::min<int32_t>(top, sprite.y));
+            right = std::min<int32_t>(displayWidth, std::max<int32_t>(right, sprite.x + sprite.destWidth));
+            bottom = std::min<int32_t>(displayHeight, std::max<int32_t>(bottom, sprite.y + sprite.destHeight));
+        }
+
+        for (int32_t row = top; row < bottom; row++) {
+            const uint32_t byteIndex = (row / 8) * displayWidth;
+            const uint8_t byteMask = 1 << (row & 7);
+            for (int32_t col = left; col < right; col++)
+                linePixelBuffer[col] =
+                    (buffer[col + byteIndex] & byteMask) ? foregroundForRow(row) : colorTftBlack;
+
+            if (pendingSprite.valid && row >= pendingSprite.y && row < pendingSprite.y + pendingSprite.destHeight) {
+                const uint16_t sourceRow =
+                    (uint16_t)(((uint32_t)(row - pendingSprite.y) * pendingSprite.sourceHeight) / pendingSprite.destHeight);
+                const int32_t spriteLeft = std::max<int32_t>(left, pendingSprite.x);
+                const int32_t spriteRight = std::min<int32_t>(right, pendingSprite.x + pendingSprite.destWidth);
+                for (int32_t col = spriteLeft; col < spriteRight; col++) {
+                    const bool coveredByOverlay = pendingOverlay.valid && col >= pendingOverlay.x &&
+                                                  col < pendingOverlay.x + pendingOverlay.width && row >= pendingOverlay.y &&
+                                                  row < pendingOverlay.y + pendingOverlay.height;
+                    if (coveredByOverlay)
+                        continue;
+                    const uint16_t sourceCol = (uint16_t)(((uint32_t)(col - pendingSprite.x) * pendingSprite.sourceWidth) /
+                                                          pendingSprite.destWidth);
+                    const uint16_t color = pendingSprite.pixels[(uint32_t)sourceRow * pendingSprite.sourceWidth + sourceCol];
+                    if (color != 0)
+                        linePixelBuffer[col] = __builtin_bswap16(color);
+                }
+            }
+
+            tft->pushRect(left, row, right - left, 1, &linePixelBuffer[left]);
+        }
+    }
+
+    if (pendingOverlay.valid) {
+        const int32_t left = std::max<int32_t>(0, pendingOverlay.x);
+        const int32_t top = std::max<int32_t>(0, pendingOverlay.y);
+        const int32_t right = std::min<int32_t>(displayWidth, pendingOverlay.x + pendingOverlay.width);
+        const int32_t bottom = std::min<int32_t>(displayHeight, pendingOverlay.y + pendingOverlay.height);
+        for (int32_t row = top; row < bottom; row++) {
+            const uint32_t byteIndex = (row / 8) * displayWidth;
+            const uint8_t byteMask = 1 << (row & 7);
+            const uint16_t foreground = foregroundForRow(row);
+            for (int32_t col = left; col < right; col++)
+                linePixelBuffer[col] = (buffer[col + byteIndex] & byteMask) ? foreground : colorTftBlack;
+            tft->pushRect(left, row, right - left, 1, &linePixelBuffer[left]);
+        }
+    }
+
+    displayedSprite = pendingSprite;
+    pendingSprite.valid = false;
+    pendingOverlay.valid = false;
+#endif
 }
 
 void TFTDisplay::sdlLoop()
