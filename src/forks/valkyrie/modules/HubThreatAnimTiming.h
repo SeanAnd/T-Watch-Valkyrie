@@ -6,7 +6,7 @@ namespace valkyrie
 {
 
 constexpr unsigned kHubScanIntroFrameCount = 6;
-constexpr uint32_t kHubScanIntroFrameMs = 480;
+constexpr uint32_t kHubScanIntroFrameMs = 240;
 
 /// Duration of the scan strip used to synchronize the detector and hub animation.
 constexpr uint32_t kHubBleScanStripOutroMs = kHubScanIntroFrameCount * kHubScanIntroFrameMs;
